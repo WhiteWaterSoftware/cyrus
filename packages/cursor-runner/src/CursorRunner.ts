@@ -120,6 +120,7 @@ function createAssistantToolUseMessage(
 		} as SDKAssistantMessage["message"]["usage"],
 		container: null,
 		context_management: null,
+		stop_details: null,
 	};
 }
 
@@ -148,6 +149,7 @@ function createAssistantTextMessage(
 		} as SDKAssistantMessage["message"]["usage"],
 		container: null,
 		context_management: null,
+		stop_details: null,
 	};
 }
 

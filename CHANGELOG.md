@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Patched 7 transitive-dependency security advisories** — Bumped `pnpm.overrides` to pull in patched versions of `hono` (>=4.12.18, fixes CSS injection in JSX SSR, cache-middleware leakage, and JWT date validation), `fast-uri` (>=3.1.2, fixes path-traversal and host-confusion via percent-encoding), `ip-address` (>=10.1.1, fixes XSS in HTML-emitting methods), and `@anthropic-ai/sdk` (>=0.91.1, fixes insecure default file permissions in the local filesystem memory tool). Also adds `stop_details: null` to BetaMessage stubs in cursor/codex/gemini runners to satisfy the new SDK type. `pnpm audit` now reports zero advisories. ([CYPACK-1186](https://linear.app/ceedar/issue/CYPACK-1186))
+
 ## [0.2.51] - 2026-04-30
 
 ### Changed
