@@ -52,16 +52,30 @@ export class SkillsPluginResolver {
 	}
 
 	/**
-	 * Ensure the user skills plugin directory is properly initialized.
-	 * Call once during EdgeWorker startup — NOT on every session.
+	 * Ensure the user-skills plugin layout exists on disk.
+	 *
+	 * Called from EdgeWorker startup — idempotent check-and-create so the
+	 * plugin is always ready before the first skill is synced, mirroring the
+	 * pattern used for other Cyrus-managed directories (repos, worktrees,
+	 * mcp-configs in `Application.ensureRequiredDirectories()`).
+	 *
+	 * Creates, if missing:
+	 *   ~/.cyrus/user-skills-plugin/
+	 *   ~/.cyrus/user-skills-plugin/skills/
+	 *   ~/.cyrus/user-skills-plugin/.claude-plugin/plugin.json
+	 *
+	 * The manifest file is what the Claude Agent SDK uses to identify the
+	 * directory as a plugin — without it, even a populated `skills/` tree is
+	 * silently ignored by the SDK's plugin loader.
 	 *
 	 * Separated from resolve() to maintain Command-Query Separation:
 	 * this method writes to the filesystem, resolve() only reads.
 	 */
 	async ensureUserPluginScaffolded(): Promise<void> {
-		if (!(await this.exists(this.userSkillsDir))) {
-			return;
-		}
+		// Always ensure the skills directory exists — handlers/skills.ts also
+		// mkdir's it recursively per-skill, but creating it eagerly here means
+		// the layout is consistent even before the first sync.
+		await mkdir(this.userSkillsDir, { recursive: true });
 
 		const manifestDir = join(this.userPluginPath, ".claude-plugin");
 		const manifestPath = join(manifestDir, "plugin.json");
@@ -82,7 +96,7 @@ export class SkillsPluginResolver {
 			),
 		);
 		this.logger.info(
-			`Auto-scaffolded user skills plugin manifest at ${manifestPath}`,
+			`Scaffolded user-skills plugin manifest at ${manifestPath}`,
 		);
 	}
 

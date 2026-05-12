@@ -1,9 +1,18 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ILogger } from "cyrus-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SkillsPluginResolver } from "../src/SkillsPluginResolver.js";
+
+async function pathExists(path: string): Promise<boolean> {
+	try {
+		await access(path);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 function createTestLogger(): ILogger {
 	return {
@@ -200,5 +209,91 @@ describe("SkillsPluginResolver scope filtering", () => {
 		const names = await resolver.discoverSkillNames(plugins);
 
 		expect(names).toEqual(expect.arrayContaining(["scoped", "unscoped"]));
+	});
+});
+
+describe("SkillsPluginResolver.ensureUserPluginScaffolded", () => {
+	let home: string;
+
+	beforeEach(async () => {
+		home = join(
+			tmpdir(),
+			`cyrus-scaffold-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		);
+		await mkdir(home, { recursive: true });
+	});
+
+	afterEach(async () => {
+		await (await import("node:fs/promises")).rm(home, {
+			recursive: true,
+			force: true,
+		});
+	});
+
+	it("creates the plugin layout on a clean home (no user-skills dir yet)", async () => {
+		const resolver = new SkillsPluginResolver(home, createTestLogger());
+		await resolver.ensureUserPluginScaffolded();
+
+		expect(await pathExists(join(home, "user-skills-plugin/skills"))).toBe(
+			true,
+		);
+		const manifestPath = join(
+			home,
+			"user-skills-plugin/.claude-plugin/plugin.json",
+		);
+		expect(await pathExists(manifestPath)).toBe(true);
+
+		const parsed = JSON.parse(await readFile(manifestPath, "utf-8"));
+		expect(parsed.name).toBe("user-skills");
+	});
+
+	it("is idempotent across repeated startups", async () => {
+		const resolver = new SkillsPluginResolver(home, createTestLogger());
+		await resolver.ensureUserPluginScaffolded();
+
+		const manifestPath = join(
+			home,
+			"user-skills-plugin/.claude-plugin/plugin.json",
+		);
+		const first = await readFile(manifestPath, "utf-8");
+
+		await resolver.ensureUserPluginScaffolded();
+		await resolver.ensureUserPluginScaffolded();
+
+		expect(await readFile(manifestPath, "utf-8")).toBe(first);
+	});
+
+	it("does not overwrite an existing manifest", async () => {
+		const manifestDir = join(home, "user-skills-plugin/.claude-plugin");
+		await mkdir(manifestDir, { recursive: true });
+		const manifestPath = join(manifestDir, "plugin.json");
+		const customManifest = JSON.stringify({
+			name: "user-skills",
+			description: "custom",
+			version: "9.9.9",
+		});
+		await writeFile(manifestPath, customManifest, "utf-8");
+
+		const resolver = new SkillsPluginResolver(home, createTestLogger());
+		await resolver.ensureUserPluginScaffolded();
+
+		expect(await readFile(manifestPath, "utf-8")).toBe(customManifest);
+	});
+
+	it("creates the skills directory even when only the manifest pre-exists", async () => {
+		const manifestDir = join(home, "user-skills-plugin/.claude-plugin");
+		await mkdir(manifestDir, { recursive: true });
+		await writeFile(
+			join(manifestDir, "plugin.json"),
+			JSON.stringify({ name: "user-skills" }),
+			"utf-8",
+		);
+
+		const resolver = new SkillsPluginResolver(home, createTestLogger());
+		await resolver.ensureUserPluginScaffolded();
+
+		expect(await pathExists(join(home, "user-skills-plugin/skills"))).toBe(
+			true,
+		);
 	});
 });
