@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { join } from "node:path";
 import type {
 	HookCallbackMatcher,
@@ -17,6 +18,7 @@ import type {
 	RepositoryConfig,
 	RunnerType,
 } from "cyrus-core";
+import { buildIntentToAddHook } from "./hooks/IntentToAddHook.js";
 import { buildPrMarkerHook } from "./hooks/PrMarkerHook.js";
 
 /**
@@ -236,12 +238,14 @@ export class RunnerConfigBuilder {
 		// plus the Stop hook that blocks the session when work is unshipped.
 		const screenshotHooks = this.buildScreenshotHooks(log);
 		const prMarkerHook = buildPrMarkerHook(log);
+		const intentToAddHook = buildIntentToAddHook(log);
 		const stopHook = this.buildStopHook(log);
 		const hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> = {
 			...stopHook,
 			PostToolUse: [
 				...(screenshotHooks.PostToolUse ?? []),
 				...(prMarkerHook.PostToolUse ?? []),
+				...(intentToAddHook.PostToolUse ?? []),
 			],
 		};
 
@@ -382,9 +386,9 @@ export class RunnerConfigBuilder {
 	 * once the hook has already fired, the next stop is always allowed through.
 	 */
 	private buildStopHook(
-		_log: ILogger,
+		log: ILogger,
 	): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
-		return buildStopHook();
+		return buildStopHook(log);
 	}
 
 	/**
@@ -542,15 +546,20 @@ export class RunnerConfigBuilder {
 }
 
 /**
- * Build a Stop hook that reminds the agent to commit, push, and open a PR
- * before ending the session. Blocks the first stop attempt and feeds the
- * guidance back to the agent via the SDK's native `decision: "block"` +
- * `reason` mechanism. The `stop_hook_active` flag prevents infinite loops —
- * once the hook has already fired, the next stop is always allowed through.
+ * Build a Stop hook that ensures the agent ships work before ending the
+ * session. Inspects the working tree at the session cwd and blocks the first
+ * stop attempt when there are uncommitted tracked changes or commits ahead
+ * of the upstream branch. The `stop_hook_active` flag prevents infinite
+ * loops — once the hook has fired, the next stop is allowed through.
+ *
+ * Pre-existing untracked files (local scratch files, env files, IDE
+ * artifacts outside `.gitignore`) do not trigger the guardrail; new files
+ * the agent writes are marked via `IntentToAddHook` so they still appear as
+ * a tracked diff and re-trigger the block when forgotten. See CYPACK-1196.
  */
-export function buildStopHook(): Partial<
-	Record<HookEvent, HookCallbackMatcher[]>
-> {
+export function buildStopHook(
+	log: ILogger,
+): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
 	return {
 		Stop: [
 			{
@@ -564,16 +573,97 @@ export function buildStopHook(): Partial<
 							return {};
 						}
 
+						const guardrail = inspectGitGuardrail(stopInput.cwd, log);
+						if (!guardrail) {
+							return {};
+						}
+
 						return {
 							decision: "block",
-							reason:
-								"Before stopping, ensure you have committed and pushed all code changes " +
-								"and created/updated a PR (if you made any code changes).\n\n" +
-								"If you have already done this (or no code changes were made), you may stop again.",
+							reason: guardrail,
 						};
 					},
 				],
 			},
 		],
 	};
+}
+
+/**
+ * Inspect the working tree at `cwd` and return a guardrail message if there
+ * is unshipped work (uncommitted tracked changes or commits ahead of the
+ * upstream). Returns null when the tree is clean, when `cwd` isn't a git
+ * repo, or when git is unavailable — in those cases the stop is not blocked.
+ *
+ * Uses `--untracked-files=no` so that pre-existing untracked files in the
+ * customer's worktree (scratch files, local env files, IDE artifacts) do not
+ * wedge the session. Files Cyrus creates via Write/Edit are marked with
+ * `git add --intent-to-add` by `IntentToAddHook` so they still show as a
+ * tracked diff and block the stop when left uncommitted.
+ */
+export function inspectGitGuardrail(cwd: string, log: ILogger): string | null {
+	const runGit = (args: string): string => {
+		return execSync(`git ${args}`, {
+			cwd,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+	};
+
+	let status: string;
+	try {
+		status = runGit("status --porcelain --untracked-files=no");
+	} catch (err) {
+		log.debug(
+			`PR guardrail: skipping (cwd is not a git repo or git failed): ${(err as Error).message}`,
+		);
+		return null;
+	}
+
+	const uncommittedFiles = status
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	const hasUncommitted = uncommittedFiles.length > 0;
+
+	let unpushedCount = 0;
+	try {
+		unpushedCount = parseInt(runGit("rev-list --count @{u}..HEAD"), 10) || 0;
+	} catch {
+		// No upstream configured — fall back to comparing against origin's default branch.
+		try {
+			const baseRef = runGit("rev-parse --verify --abbrev-ref origin/HEAD");
+			if (baseRef) {
+				unpushedCount =
+					parseInt(runGit(`rev-list --count ${baseRef}..HEAD`), 10) || 0;
+			}
+		} catch {
+			// Can't determine a base — be conservative and don't block on commits alone.
+		}
+	}
+
+	if (!hasUncommitted && unpushedCount === 0) {
+		return null;
+	}
+
+	const parts: string[] = [];
+	if (hasUncommitted) {
+		parts.push(
+			`${uncommittedFiles.length} uncommitted file change${uncommittedFiles.length === 1 ? "" : "s"}`,
+		);
+	}
+	if (unpushedCount > 0) {
+		parts.push(
+			`${unpushedCount} commit${unpushedCount === 1 ? "" : "s"} not yet on the remote`,
+		);
+	}
+
+	return (
+		`You appear to be ending the session, but the working tree has ${parts.join(" and ")}. ` +
+		"Before stopping:\n" +
+		"1. Commit any uncommitted changes with a descriptive message.\n" +
+		"2. Push the branch to the remote.\n" +
+		"3. Create or update a pull request that summarizes the change.\n\n" +
+		"If the work is genuinely complete and a PR is not appropriate (for example, a question or research task with no intended code changes), you may stop again — this guardrail only blocks once per session."
+	);
 }
