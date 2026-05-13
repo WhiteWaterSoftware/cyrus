@@ -5215,18 +5215,19 @@ ${taskSection}`;
 
 		const memoryResult = checkMemoryHealth(memoryGate);
 		if (!memoryResult.ok) {
-			const userMessage = formatMemoryPressureMessage();
+			const activeRunners = this.countActiveRunners();
+			const userMessage = formatMemoryPressureMessage(activeRunners);
 			this.logger.warn(
-				`[EdgeWorker] Memory gate rejected new runner: ${memoryResult.reason}`,
+				`[EdgeWorker] Memory gate rejected new runner: ${memoryResult.reason} (active runners: ${activeRunners})`,
 			);
 			return { ok: false, reason: memoryResult.reason, userMessage };
 		}
 
 		if (typeof maxConcurrentRunners === "number" && maxConcurrentRunners > 0) {
-			const active = this.countActiveRunners();
-			if (active >= maxConcurrentRunners) {
-				const reason = `At capacity: ${active} active runner(s), limit ${maxConcurrentRunners}`;
-				const userMessage = `Cyrus is at capacity (${active}/${maxConcurrentRunners} sessions running). Please retry when one of the in-flight sessions completes.`;
+			const activeRunners = this.countActiveRunners();
+			if (activeRunners >= maxConcurrentRunners) {
+				const reason = `At capacity: ${activeRunners} active runner(s), limit ${maxConcurrentRunners}`;
+				const userMessage = `Cyrus is at capacity (${activeRunners}/${maxConcurrentRunners} sessions running). Please retry when one of the in-flight sessions completes.`;
 				this.logger.warn(
 					`[EdgeWorker] Concurrency gate rejected runner: ${reason}`,
 				);

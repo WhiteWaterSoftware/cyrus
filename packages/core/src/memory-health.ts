@@ -164,10 +164,21 @@ export function checkMemoryHealth(
  * temporarily out of capacity. Suitable for posting to Linear/GitHub/
  * GitLab/Slack when the memory gate trips.
  *
+ * Pass `activeSessions` to disclose how many Cyrus sessions were already
+ * running when the gate fired — this helps users see whether the pressure
+ * is coming from Cyrus's own workload or from elsewhere on the host.
+ *
  * The technical reason (e.g. "Process RSS at 78.3% of system memory") is
  * intentionally omitted from the user-facing text — it remains in
  * `MemoryCheckResult.reason` for operator logs.
  */
-export function formatMemoryPressureMessage(): string {
-	return "Cyrus is temporarily out of capacity and can't start this session right now. Please retry shortly.";
+export function formatMemoryPressureMessage(activeSessions?: number): string {
+	const sessionsSuffix = formatActiveSessionsParenthetical(activeSessions);
+	return `Cyrus is temporarily out of capacity${sessionsSuffix} and can't start this session right now. Please retry shortly.`;
+}
+
+function formatActiveSessionsParenthetical(count: number | undefined): string {
+	if (count === undefined) return "";
+	const noun = count === 1 ? "session" : "sessions";
+	return ` (${count} ${noun} running)`;
 }

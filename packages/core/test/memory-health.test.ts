@@ -203,4 +203,31 @@ describe("formatMemoryPressureMessage", () => {
 		expect(msg).toContain("Cyrus is temporarily out of capacity");
 		expect(msg).not.toMatch(/rss|heap|memory|%/i);
 	});
+
+	it("omits the parenthetical count when none is provided", () => {
+		// The baseline message mentions "this session" — what we're guarding
+		// against is the new `(N session(s) running)` suffix appearing when
+		// no count was supplied.
+		const msg = formatMemoryPressureMessage();
+		expect(msg).not.toMatch(/\(\d+ session/);
+	});
+
+	it("includes the active session count when provided", () => {
+		expect(formatMemoryPressureMessage(3)).toContain("(3 sessions running)");
+	});
+
+	it("uses singular noun for exactly one active session", () => {
+		expect(formatMemoryPressureMessage(1)).toContain("(1 session running)");
+	});
+
+	it("renders zero active sessions explicitly so operators see external pressure", () => {
+		// When the host is under memory pressure with 0 Cyrus sessions, the
+		// count tells the reader the pressure is coming from outside Cyrus.
+		expect(formatMemoryPressureMessage(0)).toContain("(0 sessions running)");
+	});
+
+	it("still does not leak the technical reason when a count is included", () => {
+		const msg = formatMemoryPressureMessage(2);
+		expect(msg).not.toMatch(/rss|heap|memory|%/i);
+	});
 });
