@@ -7,6 +7,12 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - **Patched 7 transitive-dependency security advisories** — Bumped `pnpm.overrides` to pull in patched versions of `hono` (>=4.12.18, fixes CSS injection in JSX SSR, cache-middleware leakage, and JWT date validation), `fast-uri` (>=3.1.2, fixes path-traversal and host-confusion via percent-encoding), `ip-address` (>=10.1.1, fixes XSS in HTML-emitting methods), and `@anthropic-ai/sdk` (>=0.91.1, fixes insecure default file permissions in the local filesystem memory tool). Also adds `stop_details: null` to BetaMessage stubs in cursor/codex/gemini runners to satisfy the new SDK type. `pnpm audit` now reports zero advisories. ([CYPACK-1186](https://linear.app/ceedar/issue/CYPACK-1186))
 
+### Added
+- **Shared auto-memory across Slack chat sessions** — Slack-triggered chat sessions now share a persistent Claude auto-memory directory at `<cyrusHome>/slack-memory/`, so memory built up in one Slack thread carries over to every other Slack thread. ([CYPACK-1190](https://linear.app/ceedar/issue/CYPACK-1190), [#1199](https://github.com/cyrusagents/cyrus/pull/1199))
+
+### Changed
+- **Slack mention prompt nudges agents toward `linear_agent_give_feedback` for live child sessions** — When responding in Slack, Cyrus is now told to send mid-flight corrections to a running child agent session via `mcp__cyrus-tools__linear_agent_give_feedback` instead of falling back to `mcp__linear__save_comment`. Produces a stronger signal when correcting work that is already in progress. ([CYPACK-1189](https://linear.app/ceedar/issue/CYPACK-1189), [#1198](https://github.com/cyrusagents/cyrus/pull/1198))
+
 ## [0.2.51] - 2026-04-30
 
 ### Changed
