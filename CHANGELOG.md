@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.52] - 2026-05-13
+
 ### Added
 - **User skills can now be scoped to specific repositories, Linear teams, or Linear labels** — Skills synced from cyrus-hosted with `repositoryIds`, `linearTeamIds`, or `linearLabelIds` are only loaded into sessions whose context matches every populated dimension (AND across dimensions, OR within each list). Unscoped skills continue to load for every session, and old payloads without scope fields keep working as global. Scope is persisted as a `scope.json` sidecar alongside `SKILL.md` and enforced at runtime via the Claude Agent SDK's `skills` option so the model can't see or invoke out-of-scope skills. ([CYPACK-1156](https://linear.app/ceedar/issue/CYPACK-1156), [#1205](https://github.com/cyrusagents/cyrus/pull/1205))
 - **Shared auto-memory across Slack chat sessions** — Slack-triggered chat sessions now share a persistent Claude auto-memory directory at `<cyrusHome>/slack-memory/`, so memory built up in one Slack thread carries over to every other Slack thread. ([CYPACK-1190](https://linear.app/ceedar/issue/CYPACK-1190), [#1199](https://github.com/cyrusagents/cyrus/pull/1199))
@@ -13,6 +15,53 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **Slack mention prompt nudges agents toward `linear_agent_give_feedback` for live child sessions** — When responding in Slack, Cyrus is now told to send mid-flight corrections to a running child agent session via `mcp__cyrus-tools__linear_agent_give_feedback` instead of falling back to `mcp__linear__save_comment`. Produces a stronger signal when correcting work that is already in progress. ([CYPACK-1189](https://linear.app/ceedar/issue/CYPACK-1189), [#1198](https://github.com/cyrusagents/cyrus/pull/1198))
+
+### Packages
+
+#### cyrus-cloudflare-tunnel-client
+- cyrus-cloudflare-tunnel-client@0.2.52
+
+#### cyrus-mcp-tools
+- cyrus-mcp-tools@0.2.52
+
+#### cyrus-claude-runner
+- cyrus-claude-runner@0.2.52
+
+#### cyrus-core
+- cyrus-core@0.2.52
+
+#### cyrus-simple-agent-runner
+- cyrus-simple-agent-runner@0.2.52
+
+#### cyrus-codex-runner
+- cyrus-codex-runner@0.2.52
+
+#### cyrus-cursor-runner
+- cyrus-cursor-runner@0.2.52
+
+#### cyrus-config-updater
+- cyrus-config-updater@0.2.52
+
+#### cyrus-linear-event-transport
+- cyrus-linear-event-transport@0.2.52
+
+#### cyrus-github-event-transport
+- cyrus-github-event-transport@0.2.52
+
+#### cyrus-gitlab-event-transport
+- cyrus-gitlab-event-transport@0.2.52
+
+#### cyrus-slack-event-transport
+- cyrus-slack-event-transport@0.2.52
+
+#### cyrus-gemini-runner
+- cyrus-gemini-runner@0.2.52
+
+#### cyrus-edge-worker
+- cyrus-edge-worker@0.2.52
+
+#### cyrus-ai (CLI)
+- cyrus-ai@0.2.52
 
 ## [0.2.51] - 2026-04-30
 
