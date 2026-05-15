@@ -189,23 +189,35 @@ Observed authenticated-but-limited result:
 }
 ```
 
-## Real Daytona Claude Auth Probe
+## Real Daytona Claude Smoke
 
-Claude Code was validated inside Daytona far enough to prove event capture from a remote Claude process:
+Claude Code was validated inside Daytona with an explicit portable Claude Code OAuth token provided as a secret environment variable:
 
 - `@anthropic-ai/claude-code` installed successfully with a user-local npm prefix.
 - `claude --version` returned `2.1.142 (Claude Code)`.
 - `claude -p ... --output-format stream-json --verbose` emitted `system`, `assistant`, and `result` events inside Daytona.
-- The result was `Not logged in · Please run /login`.
+- The remote Claude session completed successfully with the exact requested result.
 
-Observed auth failure:
+Observed runtime result:
 
 ```json
 {
-  "success": false,
-  "result": "Not logged in · Please run /login",
-  "events": ["system", "assistant", "result"]
+  "success": true,
+  "exitCode": 0,
+  "result": "daytona claude event smoke ok",
+  "eventCount": 9,
+  "eventKinds": [
+    "setup.started",
+    "setup.completed",
+    "setup.started",
+    "setup.completed",
+    "setup.started",
+    "setup.completed",
+    "system",
+    "assistant",
+    "result",
+    "stop.requested"
+  ],
+  "transcriptKinds": ["system", "assistant", "result"]
 }
 ```
-
-The local Claude auth method is `claude.ai` first-party subscription auth, and no portable `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` was present in the environment.

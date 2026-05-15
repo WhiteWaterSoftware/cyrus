@@ -27,7 +27,7 @@ This package is intentionally built as a new standalone runtime layer with minim
 - Daytona's ComputeSDK provider was smoke-tested with a remote working directory of `/home/daytona`; `/workspace` should not be assumed portable across providers.
 - Cursor Agent was smoke-tested inside Daytona by installing the CLI with `curl https://cursor.com/install -fsS | bash` and running `/home/daytona/.local/bin/cursor-agent` with `CURSOR_API_KEY` provided as a secret environment variable.
 - Codex Agent was smoke-tested inside Daytona far enough to authenticate and start a turn by materializing `~/.codex/auth.json` as a sensitive runtime file. Passing only `OPENAI_API_KEY` from the local Codex auth file produced a remote 401. The authenticated Codex turn later hit the account usage limit.
-- Claude Code was smoke-tested inside Daytona far enough to install, start, and emit `system`/`assistant`/`result` events, but the local `claude.ai` login did not appear to be portable as a simple file or environment secret. Remote Claude completion needs an explicit portable credential such as `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`.
+- Claude Code was smoke-tested inside Daytona by installing the CLI with a user-local npm prefix and running `/home/daytona/.npm-global/bin/claude` with `CLAUDE_CODE_OAUTH_TOKEN` provided as a secret environment variable. The remote session emitted `system`/`assistant`/`result` events and completed successfully.
 
 ## Security Contract
 
