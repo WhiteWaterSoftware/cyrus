@@ -333,6 +333,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.2.123
         version: 0.2.123(zod@4.3.6)
+      '@computesdk/daytona':
+        specifier: ^1.7.26
+        version: 1.7.26(ws@8.20.0)
       '@linear/sdk':
         specifier: ^64.0.0
         version: 64.0.0(encoding@0.1.13)

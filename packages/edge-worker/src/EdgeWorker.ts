@@ -1018,8 +1018,6 @@ export class EdgeWorker extends EventEmitter {
 		this.chatSessionHandler = new AgentChatSessionHandler(
 			slackAdapter,
 			{
-				cyrusHome: this.cyrusHome,
-				chatRepositoryProvider,
 				onWebhookStart: () => {
 					this.activeWebhookCount++;
 				},

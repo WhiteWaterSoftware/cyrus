@@ -1,5 +1,3 @@
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
 import type {
 	AgentSession,
 	AgentSessionResult,
@@ -8,7 +6,6 @@ import type {
 import { createAgentSession } from "cyrus-agent-runtime";
 import type { ILogger } from "cyrus-core";
 import { createLogger } from "cyrus-core";
-import type { ChatRepositoryProvider } from "./ChatRepositoryProvider.js";
 
 /**
  * Generic chat platform adapter for the agent-runtime-backed handler.
@@ -33,8 +30,6 @@ export interface ChatPlatformAdapter<TEvent> {
 }
 
 export interface AgentChatSessionHandlerDeps {
-	cyrusHome: string;
-	chatRepositoryProvider: ChatRepositoryProvider;
 	onWebhookStart: () => void;
 	onWebhookEnd: () => void;
 	onError: (error: Error) => void;
@@ -45,6 +40,20 @@ export interface AgentChatSessionHandlerDeps {
  * `createAgentSession`. Replaces the old `ChatSessionHandler` +
  * `IAgentRunner` + `AgentSessionManager` stack with a single call into the
  * unified agent runtime.
+ *
+ * **Hardwired to Daytona + Claude.** Each Slack mention spawns a fresh
+ * Daytona sandbox, installs `@anthropic-ai/claude-code` inside it, then
+ * runs `claude --output-format stream-json` to answer. When the run
+ * completes (or fails) the sandbox is destroyed via `result.destroy()`,
+ * which maps to ComputeSDK's `ProviderSandbox.destroy()`.
+ *
+ * Requires the following environment variables (the handler refuses to
+ * construct without `DAYTONA_API_KEY`; runs will fail without a Claude
+ * token):
+ *
+ * - `DAYTONA_API_KEY` — sandbox provider auth.
+ * - `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_AUTH_TOKEN`) — Claude auth
+ *   inside the sandbox.
  *
  * Brutal cuts compared to `ChatSessionHandler` (deliberate, spike-only):
  *
@@ -64,15 +73,48 @@ export interface AgentChatSessionHandlerDeps {
  *   default toolset only.
  * - **Claude harness only.** The runner-selection layer is gone here —
  *   if the user wants Codex/Gemini for Slack chat, that's a follow-up.
+ * - **Daytona only.** No local sandbox fallback — keeps the spike
+ *   focused on the remote-streaming path we just validated.
  * - **No persisted session state.** No AgentSessionManager, no
  *   thread-to-claudeSessionId map. Each session is born and dies in
  *   one webhook turn.
  */
+// Default Daytona working directory — matches the directory used in the
+// streaming spike that validated this end-to-end. Daytona's container puts
+// the user at /home/daytona.
+const DAYTONA_WORKING_DIR = "/home/daytona";
+
+// Where claude lands after `npm install -g` with our custom npm prefix.
+const CLAUDE_CLI_PATH = `${DAYTONA_WORKING_DIR}/.npm-global/bin/claude`;
+
+// Setup commands that run inside the fresh Daytona sandbox before the
+// harness invocation. Each runs via the sandbox's default shell PATH.
+const DAYTONA_CLAUDE_SETUP_COMMANDS = [
+	`npm config set prefix ${DAYTONA_WORKING_DIR}/.npm-global`,
+	"npm install -g @anthropic-ai/claude-code@latest >/dev/null 2>&1",
+	`${CLAUDE_CLI_PATH} --version`,
+];
+
+// Guard against multiple compute.setConfig() calls — ComputeSDK uses a
+// module-global config so we only need to set it once per process.
+let computeConfigured = false;
+
+async function configureDaytonaCompute(apiKey: string): Promise<void> {
+	if (computeConfigured) return;
+	const { daytona } = await import("@computesdk/daytona");
+	const { compute } = await import("computesdk");
+	compute.setConfig({
+		provider: daytona({ apiKey, timeout: 300_000 }),
+	});
+	computeConfigured = true;
+}
+
 export class AgentChatSessionHandler<TEvent> {
 	private readonly adapter: ChatPlatformAdapter<TEvent>;
 	private readonly deps: AgentChatSessionHandlerDeps;
 	private readonly logger: ILogger;
 	private readonly threadSessions = new Map<string, AgentSession>();
+	private readonly daytonaApiKey: string;
 
 	constructor(
 		adapter: ChatPlatformAdapter<TEvent>,
@@ -83,6 +125,15 @@ export class AgentChatSessionHandler<TEvent> {
 		this.deps = deps;
 		this.logger =
 			logger ?? createLogger({ component: "AgentChatSessionHandler" });
+
+		const apiKey = process.env.DAYTONA_API_KEY?.trim();
+		if (!apiKey) {
+			throw new Error(
+				"AgentChatSessionHandler requires DAYTONA_API_KEY in the environment. " +
+					"Set it before starting Cyrus or disable the Slack integration.",
+			);
+		}
+		this.daytonaApiKey = apiKey;
 	}
 
 	/** Returns true if any thread on this handler has an in-flight session. */
@@ -123,6 +174,22 @@ export class AgentChatSessionHandler<TEvent> {
 				return;
 			}
 
+			const claudeToken =
+				process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim() ||
+				process.env.ANTHROPIC_AUTH_TOKEN?.trim();
+			if (!claudeToken) {
+				this.logger.error(
+					"Cannot run Slack chat session: no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_AUTH_TOKEN in environment",
+				);
+				await this.adapter.postReply(
+					event,
+					"I'm not configured with a Claude token, so I can't respond. Ask your admin to set CLAUDE_CODE_OAUTH_TOKEN.",
+				);
+				return;
+			}
+
+			await configureDaytonaCompute(this.daytonaApiKey);
+
 			const taskInstructions = this.adapter.extractTaskInstructions(event);
 			const threadContext = await this.adapter.fetchThreadContext(event);
 			const userPrompt = threadContext
@@ -130,26 +197,37 @@ export class AgentChatSessionHandler<TEvent> {
 				: taskInstructions;
 			const systemPrompt = this.adapter.buildSystemPrompt(event);
 
-			const workspace = await this.createWorkspace(threadKey);
-			if (!workspace) {
-				this.logger.error(
-					`Failed to create workspace for ${this.adapter.platformName} thread ${threadKey}`,
-				);
-				return;
-			}
-
 			const sessionId = `${this.adapter.platformName}-${eventId}`;
 			this.logger.info(
-				`Starting AgentSession ${sessionId} (workspace ${workspace})`,
+				`Starting Daytona AgentSession ${sessionId} for thread ${threadKey}`,
 			);
 
 			const session = await createAgentSession(
 				{
 					sessionId,
-					harness: { kind: "claude" },
+					harness: {
+						kind: "claude",
+						command: CLAUDE_CLI_PATH,
+					},
 					systemPrompt,
 					userPrompt,
-					sandbox: { provider: "local", workingDirectory: workspace },
+					secrets: {
+						CLAUDE_CODE_OAUTH_TOKEN: claudeToken,
+						ANTHROPIC_AUTH_TOKEN: claudeToken,
+					},
+					packages: {
+						commands: [...DAYTONA_CLAUDE_SETUP_COMMANDS],
+					},
+					sandbox: {
+						provider: "daytona",
+						name: `cyrus-slack-${sessionId}`,
+						workingDirectory: DAYTONA_WORKING_DIR,
+						timeoutMs: 300_000,
+						metadata: {
+							purpose: "cyrus-slack-chat",
+							threadKey,
+						},
+					},
 				},
 				{
 					callbacks: {
@@ -246,25 +324,6 @@ export class AgentChatSessionHandler<TEvent> {
 				}
 			}),
 		);
-	}
-
-	private async createWorkspace(threadKey: string): Promise<string | null> {
-		try {
-			const sanitizedKey = threadKey.replace(/[^a-zA-Z0-9.-]/g, "_");
-			const workspacePath = join(
-				this.deps.cyrusHome,
-				`${this.adapter.platformName}-workspaces`,
-				sanitizedKey,
-			);
-			await mkdir(workspacePath, { recursive: true });
-			return workspacePath;
-		} catch (error) {
-			this.logger.error(
-				`Failed to create ${this.adapter.platformName} workspace for thread ${threadKey}`,
-				error instanceof Error ? error : new Error(String(error)),
-			);
-			return null;
-		}
 	}
 
 	/**
