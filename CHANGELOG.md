@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Updated `@anthropic-ai/claude-agent-sdk` from 0.2.123 to 0.3.143 and `@anthropic-ai/sdk` from ^0.91.0 to ^0.96.0** — Brings in Claude Code v2.1.124–2.1.143 and a major SDK release (0.3.x). Key highlights: Task tools (`TaskCreate`/`TaskUpdate`/`TaskGet`/`TaskList`) now replace the deprecated `TodoWrite`; MCP servers now connect in the background by default so sessions start immediately; the v2 session API has been removed (use `query()` instead); `@anthropic-ai/sdk` is now a peer dependency. See the [claude-agent-sdk changelog](https://github.com/anthropics/claude-agent-sdk-typescript/blob/main/CHANGELOG.md) for full details. ([CYPACK-1211](https://linear.app/ceedar/issue/CYPACK-1211))
+
 ### Security
 - **Patched 9 transitive dependency advisories** — Bumped `pnpm.overrides` for `hono` (≥4.12.18, fixes CSS injection / JWT validation / Cache Middleware cross-user leakage), `fast-uri` (≥3.1.2, path traversal + host confusion), `ip-address` (≥10.1.1, `Address6` XSS), `@anthropic-ai/sdk` (≥0.91.1, insecure default file permissions in local filesystem memory tool), and `@opentelemetry/sdk-node` / `@opentelemetry/exporter-prometheus` (≥0.217.0, Prometheus exporter process crash via malformed HTTP request). `pnpm audit` now reports zero advisories. ([CYPACK-1206](https://linear.app/ceedar/issue/CYPACK-1206))
 
