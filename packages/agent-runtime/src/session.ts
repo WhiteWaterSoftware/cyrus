@@ -1,5 +1,7 @@
 import { EventEmitter } from "node:events";
-import { dirname } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
 	materializeFolderIntoSandbox,
 	materializeRepositoryIntoSandbox,
@@ -82,6 +84,13 @@ class LineSplitter {
 	}
 }
 
+const DEFAULT_AGENT_SESSIONS_ROOT = join(homedir(), ".cyrus-agent-sessions");
+
+function resolveAgentSessionsRoot(configuredRoot: string | undefined): string {
+	const root = configuredRoot ?? DEFAULT_AGENT_SESSIONS_ROOT;
+	return isAbsolute(root) ? root : resolve(process.cwd(), root);
+}
+
 export class RuntimeAgentSession extends EventEmitter implements AgentSession {
 	readonly sessionId: string;
 	readonly harness: NormalizedAgentSessionConfig["harness"]["kind"];
@@ -90,21 +99,26 @@ export class RuntimeAgentSession extends EventEmitter implements AgentSession {
 	private readonly eventBuffer = new AsyncEventBuffer<TranscriptEvent>();
 	private readonly observedEvents: TranscriptEvent[] = [];
 	private readonly queuedMessages: string[] = [];
-	private readonly inputBuffer = new AsyncEventBuffer<string>();
-	private readonly abortController = new AbortController();
-	private streamingActive = false;
-	private stopped = false;
-	private started = false;
-	private sandboxDestroyed = false;
-	private sandboxDestroyPromise?: Promise<void>;
+	private readonly sessionStateDir: string;
 	/**
 	 * Per-readwrite-folder ledger of files we materialized in, so sync-back
-	 * can re-read them even if the agent didn't touch them.
+	 * (at session.destroy()) can re-read them even if the agent didn't
+	 * touch them.
 	 */
 	private readonly folderLedger = new Map<
 		RuntimeFolderConfig,
 		readonly string[]
 	>();
+
+	private materializationDone = false;
+	private turnCount = 0;
+	private sandboxDestroyed = false;
+	private sandboxDestroyPromise?: Promise<void>;
+
+	// Per-run state — created fresh in run(), cleared in finally.
+	private currentRunAbort?: AbortController;
+	private currentInputBuffer?: AsyncEventBuffer<string>;
+	private currentRunStreaming = false;
 
 	constructor(
 		private readonly config: NormalizedAgentSessionConfig,
@@ -116,31 +130,56 @@ export class RuntimeAgentSession extends EventEmitter implements AgentSession {
 		this.sessionId = config.sessionId;
 		this.harness = adapter.kind;
 		this.events = this.eventBuffer;
+		this.sessionStateDir = join(
+			resolveAgentSessionsRoot(config.agentSessionsRoot),
+			this.sessionId,
+		);
 	}
 
-	async start(): Promise<AgentSessionResult> {
-		if (this.started) {
-			throw new Error(`Session ${this.sessionId} has already been started`);
-		}
-		this.started = true;
+	/**
+	 * Run one turn of the harness. First call materializes files/folders/
+	 * repos and runs setup commands; subsequent calls skip all of that and
+	 * invoke the harness with its resume flag so it continues the prior
+	 * conversation from the session's persistent state backing.
+	 */
+	async run(userPrompt: string): Promise<AgentSessionResult> {
+		const turnIndex = this.turnCount;
+		const continueSession = turnIndex > 0;
 
-		const command = this.adapter.buildCommand(this.config);
-		const fullCommand = [command.command, ...command.args.map(shellQuote)].join(
-			" ",
-		);
-		const env = {
-			...this.config.env,
-			...command.env,
-			...this.materializeSecrets(),
-		};
-		const cwd = this.config.sandbox.workingDirectory;
+		const abortCtrl = new AbortController();
+		const inputBuffer = new AsyncEventBuffer<string>();
+		this.currentRunAbort = abortCtrl;
+		this.currentInputBuffer = inputBuffer;
+
+		const eventStartIndex = this.observedEvents.length;
 		const startedAt = Date.now();
+		let runStopped = false;
 
 		try {
-			await this.materializeFiles();
-			await this.materializeFolders();
-			await this.materializeRepositories();
-			await this.runSetupCommands();
+			if (!this.materializationDone) {
+				await this.ensureSessionStateDir();
+				await this.materializeFiles();
+				await this.materializeFolders();
+				await this.materializeRepositories();
+				await this.runSetupCommands();
+				this.materializationDone = true;
+			}
+
+			const command = this.adapter.buildCommand(this.config, {
+				userPrompt,
+				continueSession,
+			});
+			const fullCommand = [
+				command.command,
+				...command.args.map(shellQuote),
+			].join(" ");
+			const env = {
+				HOME: this.sessionStateDir,
+				...this.config.env,
+				...command.env,
+				...this.materializeSecrets(),
+			};
+			const cwd = this.config.sandbox.workingDirectory;
 
 			const canStream =
 				typeof this.sandbox.streamCommand === "function" &&
@@ -148,19 +187,16 @@ export class RuntimeAgentSession extends EventEmitter implements AgentSession {
 
 			let exitCode: number;
 			if (canStream) {
-				this.streamingActive = true;
+				this.currentRunStreaming = true;
 				const stdoutSplitter = new LineSplitter();
 				const stderrSplitter = new LineSplitter();
-				// Only pipe stdin when the caller opts in to interactive input.
-				// Most one-shot harness CLIs (e.g. `codex exec`) block forever
-				// on a piped-but-never-closed stdin.
 				const inputIterable = this.config.interactiveInput
-					? this.inputBuffer
+					? inputBuffer
 					: undefined;
 				const result = await this.sandbox.streamCommand!(fullCommand, {
 					cwd,
 					env,
-					signal: this.abortController.signal,
+					signal: abortCtrl.signal,
 					input: inputIterable,
 					onStdout: (chunk) => {
 						stdoutSplitter.push(chunk, (line) => {
@@ -168,9 +204,7 @@ export class RuntimeAgentSession extends EventEmitter implements AgentSession {
 								sessionId: this.sessionId,
 								harness: this.harness,
 							});
-							if (event) {
-								void this.emitEvent(event);
-							}
+							if (event) void this.emitEvent(event);
 						});
 					},
 					onStderr: (chunk) => {
@@ -179,13 +213,10 @@ export class RuntimeAgentSession extends EventEmitter implements AgentSession {
 								sessionId: this.sessionId,
 								harness: this.harness,
 							});
-							if (event) {
-								void this.emitEvent(event);
-							}
+							if (event) void this.emitEvent(event);
 						});
 					},
 				});
-				// Flush any trailing partial lines the process did not terminate.
 				stdoutSplitter.flush((line) => {
 					const event = this.adapter.parseStdoutLine(line, {
 						sessionId: this.sessionId,
@@ -208,56 +239,57 @@ export class RuntimeAgentSession extends EventEmitter implements AgentSession {
 				exitCode = result.exitCode;
 			}
 
-			this.streamingActive = false;
-			this.inputBuffer.close();
+			runStopped = abortCtrl.signal.aborted;
+			this.turnCount += 1;
 
-			await this.syncFoldersBack();
-
-			const runtimeResult: AgentSessionResult = {
+			const turnEvents = this.observedEvents.slice(eventStartIndex);
+			return {
 				sessionId: this.sessionId,
 				harness: this.harness,
-				success: exitCode === 0 && !this.stopped,
+				success: exitCode === 0 && !runStopped,
 				exitCode,
-				result: this.adapter.extractResult?.(this.observedEvents),
-				events: [...this.observedEvents],
-				destroy: () => this.destroySandboxOnce(),
+				result: this.adapter.extractResult?.(turnEvents),
+				events: turnEvents,
+				destroy: () => this.destroy(),
 			};
-			this.eventBuffer.close();
-			return runtimeResult;
 		} catch (error) {
-			this.streamingActive = false;
-			this.inputBuffer.close();
 			const err = error instanceof Error ? error : new Error(String(error));
 			const failedEvent = this.createEvent("error", {
 				message: err.message,
 				durationMs: Date.now() - startedAt,
 			});
 			await this.emitEvent(failedEvent);
-			this.eventBuffer.close();
+			const turnEvents = this.observedEvents.slice(eventStartIndex);
 			return {
 				sessionId: this.sessionId,
 				harness: this.harness,
 				success: false,
 				error: err,
-				events: [...this.observedEvents],
-				destroy: () => this.destroySandboxOnce(),
+				events: turnEvents,
+				destroy: () => this.destroy(),
 			};
+		} finally {
+			this.currentRunStreaming = false;
+			inputBuffer.close();
+			this.currentInputBuffer = undefined;
+			this.currentRunAbort = undefined;
 		}
 	}
 
 	async addMessage(message: string): Promise<void> {
 		this.queuedMessages.push(message);
 		await this.emitEvent(this.createEvent("message.queued", { message }));
-		// If the harness is actively streaming AND the session was started in
-		// interactive-input mode, route this message into the running process's
-		// stdin so it can react live. Otherwise the queue remains observable
-		// via getQueuedMessages() for callers that want to drain it themselves
-		// before/after start().
-		if (this.streamingActive && this.config.interactiveInput) {
-			// Newline-terminate so line-oriented consumers (most agent CLIs in
-			// stream-json mode) see one input per line.
+		// Route into the current run's stdin only when interactive input is on
+		// AND a run is actively streaming. Outside a run, messages stay in
+		// the queue (observable via getQueuedMessages()) — callers can drain
+		// them or feed them to the next run() themselves.
+		if (
+			this.currentRunStreaming &&
+			this.config.interactiveInput &&
+			this.currentInputBuffer
+		) {
 			const wire = message.endsWith("\n") ? message : `${message}\n`;
-			this.inputBuffer.push(wire);
+			this.currentInputBuffer.push(wire);
 		}
 	}
 
@@ -266,29 +298,30 @@ export class RuntimeAgentSession extends EventEmitter implements AgentSession {
 	}
 
 	async stop(reason?: string): Promise<void> {
-		if (this.stopped) return;
-		this.stopped = true;
+		// Per-run cancel only. Does NOT destroy the sandbox or close the
+		// session-wide event stream — those live until destroy().
+		if (!this.currentRunAbort) return;
 		await this.emitEvent(this.createEvent("stop.requested", { reason }));
-		this.abortController.abort();
-		this.inputBuffer.close();
-		this.eventBuffer.close();
+		this.currentRunAbort.abort();
+		this.currentInputBuffer?.close();
 	}
 
 	async destroy(): Promise<void> {
-		// If a run is still in flight, cancel it first so the harness process
-		// terminates cleanly before we tear down the sandbox. Idempotent —
-		// safe to call after a run has already completed or been stopped.
-		if (this.started && !this.stopped) {
+		// If a run is still in flight, cancel it first so the harness exits.
+		if (this.currentRunAbort) {
 			await this.stop("destroy");
 		}
+		// Sync any read-write folders back to the host before the sandbox
+		// disappears — last chance to capture the agent's edits.
+		await this.syncFoldersBack();
 		await this.destroySandboxOnce();
+		this.eventBuffer.close();
 	}
 
 	/**
 	 * Idempotent sandbox teardown. Backs both `AgentSession.destroy()` and
-	 * the `destroy()` method on returned `AgentSessionResult`s, so callers
-	 * can safely call either or both without double-destroying the
-	 * underlying ComputeSDK / local sandbox.
+	 * `AgentSessionResult.destroy()`, so callers can call either or both
+	 * without double-destroying the underlying sandbox.
 	 */
 	private async destroySandboxOnce(): Promise<void> {
 		if (this.sandboxDestroyed) return;
@@ -349,6 +382,21 @@ export class RuntimeAgentSession extends EventEmitter implements AgentSession {
 		this.eventBuffer.push(event);
 		this.emit("transcript", event);
 		await this.callbacks.onTranscriptEvent?.(event);
+	}
+
+	/**
+	 * Ensure the per-session state-backing directory exists on the host.
+	 * The harness process's HOME is set to this directory so that, for
+	 * Claude / Codex / Gemini, the per-session `.claude` / `.codex` /
+	 * `.gemini` subdir is isolated and resumable.
+	 */
+	private async ensureSessionStateDir(): Promise<void> {
+		await mkdir(this.sessionStateDir, { recursive: true });
+		// For each state directory the harness declares, pre-create it so
+		// the harness CLI doesn't fail on first write to a missing parent.
+		for (const rel of this.adapter.stateDirectories) {
+			await mkdir(join(this.sessionStateDir, rel), { recursive: true });
+		}
 	}
 
 	private async materializeFiles(): Promise<void> {
@@ -495,6 +543,7 @@ export class RuntimeAgentSession extends EventEmitter implements AgentSession {
 				// keep going.
 			}
 		}
+		this.folderLedger.clear();
 	}
 
 	private async runSetupCommands(): Promise<void> {

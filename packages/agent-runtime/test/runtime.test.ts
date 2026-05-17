@@ -16,7 +16,6 @@ describe("AgentRuntime", () => {
 	it("normalizes minimal session config", () => {
 		const config = normalizeConfig({
 			harness: "codex",
-			userPrompt: "hello",
 			secrets: {
 				CURSOR_API_KEY: "secret",
 			},
@@ -45,7 +44,6 @@ describe("AgentRuntime", () => {
 			{
 				sessionId: "session-1",
 				harness: "codex",
-				userPrompt: "Do it",
 				env: { NODE_ENV: "test" },
 				secrets: { API_KEY: "secret" },
 			},
@@ -60,7 +58,7 @@ describe("AgentRuntime", () => {
 		);
 
 		await session.addMessage("queued");
-		const result = await session.start();
+		const result = await session.run("Do it");
 
 		expect(result).toMatchObject({
 			sessionId: "session-1",
@@ -91,7 +89,6 @@ describe("AgentRuntime", () => {
 			{
 				sessionId: "session-setup",
 				harness: "codex",
-				userPrompt: "Run after setup",
 				packages: {
 					npm: ["example-cli"],
 					commands: ["example-cli --version"],
@@ -102,7 +99,7 @@ describe("AgentRuntime", () => {
 			},
 		);
 
-		const result = await session.start();
+		const result = await session.run("Run after setup");
 
 		expect(result.success).toBe(true);
 		expect(result.events.map((event) => event.kind)).toEqual([
@@ -152,7 +149,6 @@ describe("AgentRuntime", () => {
 			{
 				sessionId: "session-stream",
 				harness: "codex",
-				userPrompt: "Do it",
 			},
 			{
 				sandboxProviders: { local: new FakeSandboxProvider(streamingSandbox) },
@@ -167,7 +163,7 @@ describe("AgentRuntime", () => {
 			},
 		);
 
-		const result = await session.start();
+		const result = await session.run("Do it");
 
 		expect(streamingSandbox.streamCalls).toBe(1);
 		expect(streamingSandbox.runCalls).toBe(0);
@@ -196,13 +192,12 @@ describe("AgentRuntime", () => {
 			{
 				sessionId: "session-buffered",
 				harness: "codex",
-				userPrompt: "fallback",
 			},
 			{
 				sandboxProviders: { local: new FakeSandboxProvider(sandbox) },
 			},
 		);
-		const result = await session.start();
+		const result = await session.run("fallback");
 		expect(result.success).toBe(true);
 		expect(result.result).toBe("buffered");
 		// Non-streaming sandboxes still get the harness command through runCommand.
@@ -226,16 +221,15 @@ describe("AgentRuntime", () => {
 			{
 				sessionId: "session-no-stdin",
 				harness: "codex",
-				userPrompt: "no stdin please",
 			},
 			{
 				sandboxProviders: { local: new FakeSandboxProvider(streamingSandbox) },
 			},
 		);
-		// Push messages before start — under no-pipe contract these stay in
+		// Push messages before run — under no-pipe contract these stay in
 		// the queue and never reach the fake's stdinChunks.
 		await session.addMessage("queued-only");
-		const result = await session.start();
+		const result = await session.run("no stdin please");
 		expect(result.success).toBe(true);
 		expect(streamingSandbox.stdinChunks).toEqual([]);
 		expect(session.getQueuedMessages()).toEqual(["queued-only"]);
@@ -256,7 +250,6 @@ describe("AgentRuntime", () => {
 			{
 				sessionId: "session-stdin",
 				harness: "codex",
-				userPrompt: "open a stream",
 				interactiveInput: true,
 			},
 			{
@@ -266,7 +259,7 @@ describe("AgentRuntime", () => {
 
 		// Kick the session, then push messages while it's streaming. Capture
 		// what reaches the fake's stdin in real time.
-		const sessionPromise = session.start();
+		const sessionPromise = session.run("open a stream");
 		// Give the sandbox a moment to begin reading its input iterable.
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		await session.addMessage("hello");
@@ -295,7 +288,6 @@ describe("AgentRuntime", () => {
 			const session = await createAgentSession({
 				sessionId: "session-folder",
 				harness: { kind: "codex", command: "true" },
-				userPrompt: "edit files please",
 				sandbox: { provider: "local", workingDirectory: sandboxRoot },
 				folders: [{ source: host, mountPath: mount, access: "readwrite" }],
 				packages: {
@@ -308,15 +300,21 @@ describe("AgentRuntime", () => {
 				},
 			});
 
-			const result = await session.start();
+			const result = await session.run("edit files please");
+			// Sync-back happens on session.destroy() now, not at the end of
+			// run() — call it so the test can assert the host file deltas.
+			await session.destroy();
 			expect(result.success).toBe(true);
 
+			// Materialize events fire inside run(); syncback fires inside destroy()
+			// — both are in result.events because run()'s event slice happens
+			// from eventStartIndex through call-time, and destroy ran after.
+			// Materialize events are guaranteed in result.events.
 			const kinds = result.events.map((e) => e.kind);
 			expect(kinds).toContain("folder.materialize.started");
 			expect(kinds).toContain("folder.materialize.completed");
-			expect(kinds).toContain("folder.syncback.started");
-			expect(kinds).toContain("folder.syncback.completed");
 
+			// Host file deltas prove sync-back ran via destroy().
 			await expect(readFile(join(host, "input.txt"), "utf8")).resolves.toBe(
 				"after",
 			);
@@ -344,7 +342,6 @@ describe("AgentRuntime", () => {
 			{
 				sessionId: "session-repo",
 				harness: "codex",
-				userPrompt: "clone please",
 				repositories: [
 					{
 						source: "/tmp/upstream",
@@ -357,7 +354,7 @@ describe("AgentRuntime", () => {
 			{ sandboxProviders: { local: new FakeSandboxProvider(sandbox) } },
 		);
 
-		const result = await session.start();
+		const result = await session.run("clone please");
 		expect(result.success).toBe(true);
 
 		const kinds = result.events.map((e) => e.kind);
@@ -377,6 +374,49 @@ describe("AgentRuntime", () => {
 		);
 	});
 
+	it("supports multi-turn run() — first turn fresh, second turn continues", async () => {
+		// First run is a fresh harness invocation (materializes setup, no
+		// --continue). Second run skips materialization and passes --continue.
+		// We verify both by inspecting the recorded sandbox commands.
+		const sandbox = new FakeSandbox(
+			JSON.stringify({
+				type: "item.completed",
+				item: { type: "agent_message", text: "ok" },
+			}),
+		);
+		const session = await createAgentSession(
+			{
+				sessionId: "session-multi-turn",
+				harness: "claude", // claude has stateDirectories: [".claude"]
+				packages: { commands: ["echo install"] },
+			},
+			{ sandboxProviders: { local: new FakeSandboxProvider(sandbox) } },
+		);
+
+		const r1 = await session.run("first message");
+		expect(r1.success).toBe(true);
+
+		const r2 = await session.run("second message");
+		expect(r2.success).toBe(true);
+
+		// Setup commands ran only once (first turn).
+		const setupRuns = sandbox.commands.filter(
+			(c) => c.command === "echo install",
+		);
+		expect(setupRuns).toHaveLength(1);
+
+		// First harness invocation: no --continue.
+		// Second: --continue present.
+		const harnessRuns = sandbox.commands.filter((c) =>
+			c.command.startsWith("claude "),
+		);
+		expect(harnessRuns).toHaveLength(2);
+		expect(harnessRuns[0]!.command).not.toContain("--continue");
+		expect(harnessRuns[1]!.command).toContain("--continue");
+
+		await session.destroy();
+	});
+
 	it("decouples stop() from sandbox destruction; destroy() is the only release path", async () => {
 		// stop() cancels the run; destroy() releases the sandbox. They are
 		// separate operations: stop() must NOT destroy, and destroy() can
@@ -393,12 +433,11 @@ describe("AgentRuntime", () => {
 			{
 				sessionId: "session-destroy",
 				harness: "codex",
-				userPrompt: "anything",
 			},
 			{ sandboxProviders: { local: new FakeSandboxProvider(sandbox) } },
 		);
 
-		const result = await session.start();
+		const result = await session.run("anything");
 		expect(result.success).toBe(true);
 		expect(typeof result.destroy).toBe("function");
 		expect(typeof session.destroy).toBe("function");
@@ -440,12 +479,11 @@ describe("AgentRuntime", () => {
 			{
 				sessionId: "session-destroy-live",
 				harness: "codex",
-				userPrompt: "anything",
 			},
 			{ sandboxProviders: { local: new FakeSandboxProvider(sandbox) } },
 		);
 
-		const startPromise = session.start();
+		const startPromise = session.run("anything");
 		await new Promise((resolve) => setTimeout(resolve, 80));
 		// Run is in flight; destroy must both cancel and release.
 		await session.destroy();
@@ -472,7 +510,6 @@ describe("AgentRuntime", () => {
 			{
 				sessionId: "session-files",
 				harness: "codex",
-				userPrompt: "Run after files",
 				files: [
 					{
 						path: "/home/daytona/.codex/auth.json",
@@ -486,7 +523,7 @@ describe("AgentRuntime", () => {
 			},
 		);
 
-		const result = await session.start();
+		const result = await session.run("Run after files");
 
 		expect(result.success).toBe(true);
 		expect(sandbox.files).toEqual([

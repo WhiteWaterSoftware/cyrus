@@ -1,23 +1,38 @@
-import type { HarnessAdapter, NormalizedAgentSessionConfig } from "../types.js";
+import type {
+	HarnessAdapter,
+	HarnessRunOptions,
+	NormalizedAgentSessionConfig,
+} from "../types.js";
 import { createCommand, parseJsonLine, resolveModel } from "./common.js";
 
 export const claudeHarness: HarnessAdapter = {
 	kind: "claude",
-	buildCommand(config: NormalizedAgentSessionConfig) {
+	stateDirectories: [".claude"],
+	buildCommand(
+		config: NormalizedAgentSessionConfig,
+		options: HarnessRunOptions,
+	) {
 		const args = [
 			"-p",
-			config.userPrompt,
+			options.userPrompt,
 			"--output-format",
 			"stream-json",
 			"--verbose",
 		];
+		if (options.continueSession) {
+			// Resume the most recent session in the current cwd. Claude tracks
+			// sessions per cwd, so the runtime's per-session HOME isolation
+			// guarantees we pick up the right conversation.
+			args.push("--continue");
+		}
 		const model = resolveModel(config);
 
 		if (model) {
 			args.push("--model", model);
 		}
 
-		if (config.systemPrompt) {
+		if (config.systemPrompt && !options.continueSession) {
+			// On continue, Claude already has the system prompt baked in.
 			args.push("--append-system-prompt", config.systemPrompt);
 		}
 

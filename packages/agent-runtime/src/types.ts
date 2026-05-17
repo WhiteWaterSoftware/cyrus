@@ -157,7 +157,6 @@ export interface CreateAgentSessionConfig {
 	harness: HarnessKind | RuntimeHarnessConfig;
 	model?: string;
 	systemPrompt?: string;
-	userPrompt: string;
 	env?: Record<string, string>;
 	secrets?: Record<string, RuntimeSecret | string>;
 	packages?: RuntimePackageConfig;
@@ -170,6 +169,15 @@ export interface CreateAgentSessionConfig {
 	sandbox?: RuntimeSandboxConfig;
 	networkEgress?: RuntimeNetworkEgressConfig;
 	metadata?: Record<string, unknown>;
+	/**
+	 * Root host directory under which each session's state backing lives.
+	 * Defaults to `~/.cyrus-agent-sessions/`. Each session gets a
+	 * subdirectory `<root>/<sessionId>/`. For the local sandbox the
+	 * subdirectory becomes the harness process's `HOME`, so per-session
+	 * `.claude` / `.codex` / `.gemini` state is naturally isolated and
+	 * resumable across `session.run()` calls.
+	 */
+	agentSessionsRoot?: string;
 	/**
 	 * When `true`, opens an interactive stdin pipe to the harness process so
 	 * `addMessage()` chunks reach the running CLI live. Default `false` —
@@ -197,9 +205,39 @@ export interface HarnessCommand {
 	stdin?: string;
 }
 
+/**
+ * Options passed by `RuntimeAgentSession` to the harness adapter on each
+ * `run()`. The adapter uses these to construct the per-turn invocation —
+ * for instance, Claude maps `continueSession: true` to `--continue`.
+ */
+export interface HarnessRunOptions {
+	userPrompt: string;
+	/**
+	 * `true` on every `run()` after the first, signalling the harness
+	 * should resume the prior conversation in the session's backing
+	 * (e.g. Claude `--continue`). `false` on the first run.
+	 */
+	continueSession: boolean;
+}
+
 export interface HarnessAdapter {
 	readonly kind: HarnessKind;
-	buildCommand(config: NormalizedAgentSessionConfig): HarnessCommand;
+	/**
+	 * Relative paths (under `HOME` inside the compute) where the harness
+	 * keeps its session state. The runtime ensures these survive between
+	 * `run()` calls by making the parent (`HOME`) per-session persistent.
+	 *
+	 * - Claude: `[".claude"]`
+	 * - Codex:  `[".codex"]`
+	 * - Gemini: `[".gemini"]`
+	 *
+	 * Adapters without a resumable state model leave this empty.
+	 */
+	readonly stateDirectories: readonly string[];
+	buildCommand(
+		config: NormalizedAgentSessionConfig,
+		options: HarnessRunOptions,
+	): HarnessCommand;
 	parseStdoutLine(
 		line: string,
 		context: TranscriptParseContext,
@@ -361,7 +399,17 @@ export interface AgentSession {
 	readonly sessionId: string;
 	readonly harness: HarnessKind;
 	readonly events: AsyncIterable<TranscriptEvent>;
-	start(): Promise<AgentSessionResult>;
+	/**
+	 * Run one turn of the harness against this session.
+	 *
+	 * On the first call, the runtime materializes files/folders/repos,
+	 * runs setup commands, then invokes the harness with the supplied
+	 * prompt. On subsequent calls, materialization and setup are
+	 * skipped and the harness is invoked with its resume flag (Claude:
+	 * `--continue`) so it picks up the prior conversation from the
+	 * session's persistent state backing.
+	 */
+	run(userPrompt: string): Promise<AgentSessionResult>;
 	addMessage(message: string): Promise<void>;
 	interrupt(reason?: string): Promise<void>;
 	/**

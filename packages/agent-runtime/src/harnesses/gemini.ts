@@ -1,9 +1,17 @@
-import type { HarnessAdapter, NormalizedAgentSessionConfig } from "../types.js";
+import type {
+	HarnessAdapter,
+	HarnessRunOptions,
+	NormalizedAgentSessionConfig,
+} from "../types.js";
 import { createCommand, parseJsonLine, resolveModel } from "./common.js";
 
 export const geminiHarness: HarnessAdapter = {
 	kind: "gemini",
-	buildCommand(config: NormalizedAgentSessionConfig) {
+	stateDirectories: [".gemini"],
+	buildCommand(
+		config: NormalizedAgentSessionConfig,
+		options: HarnessRunOptions,
+	) {
 		const args = ["--output-format", "stream-json"];
 		const model = resolveModel(config) ?? "gemini-2.5-pro";
 
@@ -13,11 +21,13 @@ export const geminiHarness: HarnessAdapter = {
 			args.push("--approval-mode", config.permissions.mode);
 		}
 
-		args.push("-p", config.userPrompt);
+		args.push("-p", options.userPrompt);
 
 		return createCommand(config, "gemini", args, {
 			env: {
-				GEMINI_SYSTEM_MD: config.systemPrompt,
+				GEMINI_SYSTEM_MD: options.continueSession
+					? undefined
+					: config.systemPrompt,
 			},
 		});
 	},

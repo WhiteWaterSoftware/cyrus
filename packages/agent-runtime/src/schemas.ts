@@ -66,7 +66,7 @@ export const CreateAgentSessionConfigSchema = z.object({
 	harness: z.union([HarnessKindSchema, RuntimeHarnessConfigSchema]),
 	model: z.string().optional(),
 	systemPrompt: z.string().optional(),
-	userPrompt: z.string().min(1),
+	agentSessionsRoot: z.string().optional(),
 	env: z.record(z.string(), z.string()).optional(),
 	secrets: z
 		.record(

@@ -1,9 +1,17 @@
-import type { HarnessAdapter, NormalizedAgentSessionConfig } from "../types.js";
+import type {
+	HarnessAdapter,
+	HarnessRunOptions,
+	NormalizedAgentSessionConfig,
+} from "../types.js";
 import { createCommand, parseJsonLine, resolveModel } from "./common.js";
 
 export const piHarness: HarnessAdapter = {
 	kind: "pi",
-	buildCommand(config: NormalizedAgentSessionConfig) {
+	stateDirectories: [],
+	buildCommand(
+		config: NormalizedAgentSessionConfig,
+		options: HarnessRunOptions,
+	) {
 		const args = ["run", "--json"];
 		const model = resolveModel(config);
 
@@ -11,11 +19,11 @@ export const piHarness: HarnessAdapter = {
 			args.push("--model", model);
 		}
 
-		if (config.systemPrompt) {
+		if (config.systemPrompt && !options.continueSession) {
 			args.push("--system", config.systemPrompt);
 		}
 
-		args.push("--prompt", config.userPrompt);
+		args.push("--prompt", options.userPrompt);
 
 		return createCommand(config, "pi", args);
 	},

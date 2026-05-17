@@ -1,8 +1,4 @@
-import type {
-	AgentSession,
-	AgentSessionResult,
-	TranscriptEvent,
-} from "cyrus-agent-runtime";
+import type { AgentSession, TranscriptEvent } from "cyrus-agent-runtime";
 import { createAgentSession } from "cyrus-agent-runtime";
 import type { ILogger } from "cyrus-core";
 import { createLogger } from "cyrus-core";
@@ -33,52 +29,17 @@ export interface AgentChatSessionHandlerDeps {
 	onWebhookStart: () => void;
 	onWebhookEnd: () => void;
 	onError: (error: Error) => void;
+	/**
+	 * How long a thread's warm session can sit idle before the handler
+	 * destroys it (sandbox torn down, slot freed). Default 15 minutes.
+	 * Next mention after eviction starts a fresh sandbox + fresh Claude
+	 * session.
+	 */
+	idleTtlMs?: number;
 }
 
-/**
- * Slim chat-session handler built on top of `cyrus-agent-runtime`'s
- * `createAgentSession`. Replaces the old `ChatSessionHandler` +
- * `IAgentRunner` + `AgentSessionManager` stack with a single call into the
- * unified agent runtime.
- *
- * **Hardwired to Daytona + Claude.** Each Slack mention spawns a fresh
- * Daytona sandbox, installs `@anthropic-ai/claude-code` inside it, then
- * runs `claude --output-format stream-json` to answer. When the run
- * completes (or fails) the sandbox is destroyed via `result.destroy()`,
- * which maps to ComputeSDK's `ProviderSandbox.destroy()`.
- *
- * Requires the following environment variables (the handler refuses to
- * construct without `DAYTONA_API_KEY`; runs will fail without a Claude
- * token):
- *
- * - `DAYTONA_API_KEY` — sandbox provider auth.
- * - `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_AUTH_TOKEN`) — Claude auth
- *   inside the sandbox.
- *
- * Brutal cuts compared to `ChatSessionHandler` (deliberate, spike-only):
- *
- * - **No multi-turn `--continue` resume.** Each platform event spawns a
- *   fresh `AgentSession`. Conversation continuity comes from the
- *   adapter's `fetchThreadContext()` injecting the prior thread as text
- *   into the user prompt.
- * - **No mid-flight stream injection.** If a thread already has an
- *   in-flight session, the new message gets `notifyBusy()`. (Future
- *   work: route through `AgentSession.addMessage()` with
- *   `interactiveInput: true` for harnesses that consume stream-json
- *   stdin.)
- * - **No MCP servers.** `cyrus-agent-runtime` accepts an `mcps` field
- *   but doesn't yet wire them through to the harness CLI. In-process
- *   SDK servers (cyrus-tools) wouldn't translate across the subprocess
- *   boundary anyway. Slack chat sessions run with the Claude CLI's
- *   default toolset only.
- * - **Claude harness only.** The runner-selection layer is gone here —
- *   if the user wants Codex/Gemini for Slack chat, that's a follow-up.
- * - **Daytona only.** No local sandbox fallback — keeps the spike
- *   focused on the remote-streaming path we just validated.
- * - **No persisted session state.** No AgentSessionManager, no
- *   thread-to-claudeSessionId map. Each session is born and dies in
- *   one webhook turn.
- */
+const DEFAULT_IDLE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
 // Default Daytona working directory — matches the directory used in the
 // streaming spike that validated this end-to-end. Daytona's container puts
 // the user at /home/daytona.
@@ -109,12 +70,62 @@ async function configureDaytonaCompute(apiKey: string): Promise<void> {
 	computeConfigured = true;
 }
 
+interface ThreadState<TEvent> {
+	session: AgentSession;
+	lastActivityAt: number;
+	/**
+	 * In-flight run promise, if any. Used so a second webhook for the
+	 * same thread can detect "busy" without racing on session.run().
+	 */
+	inFlight?: Promise<unknown>;
+	/** Last event the handler answered for; used as the busy-notify target. */
+	lastEvent: TEvent;
+}
+
+/**
+ * Chat-session handler built on top of `cyrus-agent-runtime`'s
+ * `createAgentSession` + multi-turn `session.run()`. Replaces the old
+ * `ChatSessionHandler` + `IAgentRunner` + `AgentSessionManager` stack.
+ *
+ * **Hardwired to Daytona + Claude.** First message in a thread spawns a
+ * fresh Daytona sandbox and installs `@anthropic-ai/claude-code` inside it.
+ * The sandbox is kept warm; follow-up messages reuse it via Claude's
+ * `--continue` flag (the runtime sets the session's HOME to a persistent
+ * per-session directory so `.claude/` survives between turns). After an
+ * idle TTL the handler destroys the sandbox and frees the slot.
+ *
+ * Requires the following environment variables:
+ *
+ * - `DAYTONA_API_KEY` — sandbox provider auth (refuses to construct without).
+ * - `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_AUTH_TOKEN`) — Claude auth
+ *   inside the sandbox.
+ *
+ * Brutal cuts compared to the legacy `ChatSessionHandler` (deliberate,
+ * spike-only):
+ *
+ * - **No mid-flight stream injection.** A second message while the thread's
+ *   session is still answering the first triggers `notifyBusy()` rather
+ *   than injecting into stdin. Future work: route through
+ *   `AgentSession.addMessage()` with `interactiveInput: true`.
+ * - **No MCP servers.** `cyrus-agent-runtime` doesn't yet wire them through
+ *   to the harness CLI; the cyrus-tools in-process SDK server wouldn't
+ *   translate across the subprocess boundary anyway. Slack chat runs with
+ *   the Claude CLI default toolset only.
+ * - **Claude harness only.** No runner-selection layer.
+ * - **Daytona compute only.** No local-sandbox fallback for chat.
+ * - **No cross-process recovery.** EdgeWorker restart drops the warm-thread
+ *   map; next mention is a cold start. Daytona's own autoStopInterval
+ *   eventually reclaims any orphaned sandboxes.
+ */
 export class AgentChatSessionHandler<TEvent> {
 	private readonly adapter: ChatPlatformAdapter<TEvent>;
 	private readonly deps: AgentChatSessionHandlerDeps;
 	private readonly logger: ILogger;
-	private readonly threadSessions = new Map<string, AgentSession>();
+	private readonly threadSessions = new Map<string, ThreadState<TEvent>>();
 	private readonly daytonaApiKey: string;
+	private readonly idleTtlMs: number;
+	private idleSweepTimer?: NodeJS.Timeout;
+	private shuttingDown = false;
 
 	constructor(
 		adapter: ChatPlatformAdapter<TEvent>,
@@ -134,17 +145,31 @@ export class AgentChatSessionHandler<TEvent> {
 			);
 		}
 		this.daytonaApiKey = apiKey;
+		this.idleTtlMs = deps.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
+
+		// Sweep every minute; sweep work is cheap (just a map iteration + maybe
+		// a destroy() per expired entry).
+		this.idleSweepTimer = setInterval(() => {
+			void this.sweepIdle();
+		}, 60_000);
+		this.idleSweepTimer.unref?.();
 	}
 
 	/** Returns true if any thread on this handler has an in-flight session. */
 	isAnyRunnerBusy(): boolean {
-		return this.threadSessions.size > 0;
+		for (const state of this.threadSessions.values()) {
+			if (state.inFlight) return true;
+		}
+		return false;
 	}
 
 	/** Test/inspection: enumerate active threads. */
 	listThreads(): Array<{ threadKey: string; sessionId: string }> {
 		return Array.from(this.threadSessions.entries()).map(
-			([threadKey, session]) => ({ threadKey, sessionId: session.sessionId }),
+			([threadKey, state]) => ({
+				threadKey,
+				sessionId: state.session.sessionId,
+			}),
 		);
 	}
 
@@ -157,18 +182,18 @@ export class AgentChatSessionHandler<TEvent> {
 				`Processing ${this.adapter.platformName} webhook: ${eventId} (thread ${threadKey})`,
 			);
 
-			// Fire-and-forget acknowledgement (e.g. emoji reaction)
+			// Fire-and-forget acknowledgement (e.g. emoji reaction).
 			this.adapter.acknowledgeReceipt(event).catch((err: unknown) => {
 				this.logger.warn(
 					`Failed to acknowledge ${this.adapter.platformName} event: ${err instanceof Error ? err.message : err}`,
 				);
 			});
 
-			// In-flight thread → notify and bail out. (Brutal cut: no mid-flight
-			// stream injection — see header for why.)
-			if (this.threadSessions.has(threadKey)) {
+			// Busy thread → notify and bail. No stdin injection today.
+			const existing = this.threadSessions.get(threadKey);
+			if (existing?.inFlight) {
 				this.logger.info(
-					`Thread ${threadKey} has an active session; notifying user.`,
+					`Thread ${threadKey} has an in-flight session; notifying user.`,
 				);
 				await this.adapter.notifyBusy(event, threadKey);
 				return;
@@ -191,108 +216,125 @@ export class AgentChatSessionHandler<TEvent> {
 			await configureDaytonaCompute(this.daytonaApiKey);
 
 			const taskInstructions = this.adapter.extractTaskInstructions(event);
-			const threadContext = await this.adapter.fetchThreadContext(event);
-			const userPrompt = threadContext
-				? `${threadContext}\n\n${taskInstructions}`
+			const isFirstTurn = !existing;
+
+			// Thread context is injected only on the first turn — subsequent
+			// turns are continuations of the same Claude session, which already
+			// knows the prior conversation.
+			const userPrompt = isFirstTurn
+				? await this.buildFirstTurnPrompt(event, taskInstructions)
 				: taskInstructions;
-			const systemPrompt = this.adapter.buildSystemPrompt(event);
 
-			const sessionId = `${this.adapter.platformName}-${eventId}`;
-			this.logger.info(
-				`Starting Daytona AgentSession ${sessionId} for thread ${threadKey}`,
-			);
-
-			const session = await createAgentSession(
-				{
-					sessionId,
-					harness: {
-						kind: "claude",
-						command: CLAUDE_CLI_PATH,
-					},
-					systemPrompt,
-					userPrompt,
-					secrets: {
-						CLAUDE_CODE_OAUTH_TOKEN: claudeToken,
-						ANTHROPIC_AUTH_TOKEN: claudeToken,
-					},
-					packages: {
-						commands: [...DAYTONA_CLAUDE_SETUP_COMMANDS],
-					},
-					sandbox: {
-						provider: "daytona",
-						name: `cyrus-slack-${sessionId}`,
-						workingDirectory: DAYTONA_WORKING_DIR,
-						timeoutMs: 300_000,
-						metadata: {
-							purpose: "cyrus-slack-chat",
-							threadKey,
+			let state: ThreadState<TEvent>;
+			if (existing) {
+				state = existing;
+			} else {
+				const systemPrompt = this.adapter.buildSystemPrompt(event);
+				const sessionId = `${this.adapter.platformName}-${eventId}`;
+				this.logger.info(
+					`Creating Daytona AgentSession ${sessionId} for thread ${threadKey}`,
+				);
+				const session = await createAgentSession(
+					{
+						sessionId,
+						harness: {
+							kind: "claude",
+							command: CLAUDE_CLI_PATH,
+						},
+						systemPrompt,
+						secrets: {
+							CLAUDE_CODE_OAUTH_TOKEN: claudeToken,
+							ANTHROPIC_AUTH_TOKEN: claudeToken,
+						},
+						packages: {
+							commands: [...DAYTONA_CLAUDE_SETUP_COMMANDS],
+						},
+						sandbox: {
+							provider: "daytona",
+							name: `cyrus-slack-${sessionId}`,
+							workingDirectory: DAYTONA_WORKING_DIR,
+							timeoutMs: 300_000,
+							metadata: {
+								purpose: "cyrus-slack-chat",
+								threadKey,
+							},
 						},
 					},
-				},
-				{
-					callbacks: {
-						onTranscriptEvent: (te) => {
-							this.logger.debug(`[${sessionId}] transcript event: ${te.kind}`);
+					{
+						callbacks: {
+							onTranscriptEvent: (te) => {
+								this.logger.debug(
+									`[${sessionId}] transcript event: ${te.kind}`,
+								);
+							},
 						},
 					},
-				},
-			);
-			this.threadSessions.set(threadKey, session);
-
-			let result: AgentSessionResult;
-			try {
-				result = await session.start();
-			} finally {
-				this.threadSessions.delete(threadKey);
+				);
+				state = {
+					session,
+					lastActivityAt: Date.now(),
+					lastEvent: event,
+				};
+				this.threadSessions.set(threadKey, state);
 			}
 
-			if (!result.success) {
-				this.logger.error(
-					`Session ${sessionId} did not succeed (exitCode=${result.exitCode})`,
-					result.error,
-				);
-				if (result.error) this.deps.onError(result.error);
-				// Best-effort: post a brief failure note instead of leaving the user hanging.
+			// Mark the run as in-flight so concurrent webhooks see "busy".
+			const runPromise = state.session.run(userPrompt);
+			state.inFlight = runPromise;
+			state.lastEvent = event;
+
+			try {
+				const result = await runPromise;
+				state.lastActivityAt = Date.now();
+
+				if (!result.success) {
+					this.logger.error(
+						`Session ${state.session.sessionId} turn did not succeed (exitCode=${result.exitCode})`,
+						result.error,
+					);
+					if (result.error) this.deps.onError(result.error);
+					try {
+						await this.adapter.postReply(
+							event,
+							result.error
+								? `I hit an error: ${result.error.message}`
+								: `I couldn't complete the request (exit code ${result.exitCode}).`,
+						);
+					} catch (postErr) {
+						this.logger.error(
+							`Failed to post failure notice for session ${state.session.sessionId}`,
+							postErr instanceof Error ? postErr : new Error(String(postErr)),
+						);
+					}
+					// A failed run kills the thread — destroy and free the slot
+					// so the next mention starts fresh.
+					await this.destroyThread(threadKey);
+					return;
+				}
+
+				const finalText =
+					result.result ?? this.extractAssistantFallback(result.events);
+				if (!finalText) {
+					this.logger.warn(
+						`Session ${state.session.sessionId} completed but produced no result text`,
+					);
+					return;
+				}
+
 				try {
-					await this.adapter.postReply(
-						event,
-						result.error
-							? `I hit an error: ${result.error.message}`
-							: `I couldn't complete the request (exit code ${result.exitCode}).`,
+					await this.adapter.postReply(event, finalText);
+					this.logger.info(
+						`Posted reply for session ${state.session.sessionId}`,
 					);
 				} catch (postErr) {
 					this.logger.error(
-						`Failed to post failure notice for session ${sessionId}`,
+						`Failed to post reply for session ${state.session.sessionId}`,
 						postErr instanceof Error ? postErr : new Error(String(postErr)),
 					);
 				}
-				await result.destroy();
-				return;
+			} finally {
+				state.inFlight = undefined;
 			}
-
-			// Prefer the harness-extracted result string; fall back to scanning
-			// transcript events for the last assistant text.
-			const finalText =
-				result.result ?? this.extractAssistantFallback(result.events);
-			if (!finalText) {
-				this.logger.warn(
-					`Session ${sessionId} completed but produced no result text`,
-				);
-				await result.destroy();
-				return;
-			}
-
-			try {
-				await this.adapter.postReply(event, finalText);
-				this.logger.info(`Posted reply for session ${sessionId}`);
-			} catch (postErr) {
-				this.logger.error(
-					`Failed to post reply for session ${sessionId}`,
-					postErr instanceof Error ? postErr : new Error(String(postErr)),
-				);
-			}
-
-			await result.destroy();
 		} catch (error) {
 			this.logger.error(
 				`Failed to process ${this.adapter.platformName} webhook`,
@@ -307,23 +349,68 @@ export class AgentChatSessionHandler<TEvent> {
 	}
 
 	/**
-	 * Stop all in-flight sessions and release their sandboxes. Used at
-	 * EdgeWorker shutdown.
+	 * Stop the idle sweeper and destroy every warm thread session.
 	 */
 	async shutdown(): Promise<void> {
-		const sessions = Array.from(this.threadSessions.values());
+		this.shuttingDown = true;
+		if (this.idleSweepTimer) {
+			clearInterval(this.idleSweepTimer);
+			this.idleSweepTimer = undefined;
+		}
+		const states = Array.from(this.threadSessions.values());
 		this.threadSessions.clear();
 		await Promise.all(
-			sessions.map(async (session) => {
+			states.map(async (state) => {
 				try {
-					await session.destroy();
+					await state.session.destroy();
 				} catch (err) {
 					this.logger.warn(
-						`Failed to destroy session ${session.sessionId} during shutdown: ${err instanceof Error ? err.message : err}`,
+						`Failed to destroy session ${state.session.sessionId} during shutdown: ${err instanceof Error ? err.message : err}`,
 					);
 				}
 			}),
 		);
+	}
+
+	private async buildFirstTurnPrompt(
+		event: TEvent,
+		taskInstructions: string,
+	): Promise<string> {
+		const threadContext = await this.adapter.fetchThreadContext(event);
+		return threadContext
+			? `${threadContext}\n\n${taskInstructions}`
+			: taskInstructions;
+	}
+
+	private async destroyThread(threadKey: string): Promise<void> {
+		const state = this.threadSessions.get(threadKey);
+		if (!state) return;
+		this.threadSessions.delete(threadKey);
+		try {
+			await state.session.destroy();
+		} catch (err) {
+			this.logger.warn(
+				`Failed to destroy thread ${threadKey} session ${state.session.sessionId}: ${err instanceof Error ? err.message : err}`,
+			);
+		}
+	}
+
+	private async sweepIdle(): Promise<void> {
+		if (this.shuttingDown) return;
+		const now = Date.now();
+		const expired: string[] = [];
+		for (const [threadKey, state] of this.threadSessions) {
+			if (state.inFlight) continue;
+			if (now - state.lastActivityAt >= this.idleTtlMs) {
+				expired.push(threadKey);
+			}
+		}
+		for (const threadKey of expired) {
+			this.logger.info(
+				`Evicting idle thread ${threadKey} after ${Math.round(this.idleTtlMs / 1000)}s of inactivity`,
+			);
+			await this.destroyThread(threadKey);
+		}
 	}
 
 	/**

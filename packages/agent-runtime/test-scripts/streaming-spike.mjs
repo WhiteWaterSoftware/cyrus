@@ -297,8 +297,6 @@ async function runRuntimeLocalSpike() {
 		{
 			sessionId: "runtime-stream-spike",
 			harness: { kind: "codex", model: "gpt-5.2" },
-			userPrompt:
-				"Reply exactly: runtime stream spike ok. Do not call any tools.",
 			sandbox: { provider: "local", workingDirectory: process.cwd() },
 		},
 		{
@@ -312,7 +310,9 @@ async function runRuntimeLocalSpike() {
 		},
 	);
 
-	const result = await session.start();
+	const result = await session.run(
+		"Reply exactly: runtime stream spike ok. Do not call any tools.",
+	);
 	console.log("\nsession result:", {
 		success: result.success,
 		exitCode: result.exitCode,

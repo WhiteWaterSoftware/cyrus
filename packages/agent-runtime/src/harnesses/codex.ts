@@ -1,9 +1,17 @@
-import type { HarnessAdapter, NormalizedAgentSessionConfig } from "../types.js";
+import type {
+	HarnessAdapter,
+	HarnessRunOptions,
+	NormalizedAgentSessionConfig,
+} from "../types.js";
 import { createCommand, parseJsonLine, resolveModel } from "./common.js";
 
 export const codexHarness: HarnessAdapter = {
 	kind: "codex",
-	buildCommand(config: NormalizedAgentSessionConfig) {
+	stateDirectories: [".codex"],
+	buildCommand(
+		config: NormalizedAgentSessionConfig,
+		options: HarnessRunOptions,
+	) {
 		const args = ["exec", "--json", "--skip-git-repo-check"];
 		const model = resolveModel(config);
 
@@ -11,7 +19,7 @@ export const codexHarness: HarnessAdapter = {
 			args.push("--model", model);
 		}
 
-		if (config.systemPrompt) {
+		if (config.systemPrompt && !options.continueSession) {
 			args.push(
 				"-c",
 				`developer_instructions=${JSON.stringify(config.systemPrompt)}`,
@@ -25,7 +33,10 @@ export const codexHarness: HarnessAdapter = {
 			);
 		}
 
-		args.push(config.userPrompt);
+		// Codex's resume/continue flag varies by CLI version; the runtime
+		// currently passes the prompt as a positional arg either way. When a
+		// real codex resume mechanism is wired, branch on options.continueSession.
+		args.push(options.userPrompt);
 
 		return createCommand(config, "codex", args);
 	},

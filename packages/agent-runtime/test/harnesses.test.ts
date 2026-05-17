@@ -9,7 +9,6 @@ import type { NormalizedAgentSessionConfig } from "../src/types.js";
 const baseConfig: NormalizedAgentSessionConfig = {
 	sessionId: "session-1",
 	harness: { kind: "claude" },
-	userPrompt: "Fix the failing test",
 	env: {},
 	secrets: {},
 	sandbox: {
@@ -31,16 +30,19 @@ describe("harness adapters", () => {
 	});
 
 	it("builds a Claude stream-json command", () => {
-		const command = buildHarnessInvocation({
-			...baseConfig,
-			model: "claude-sonnet-4-5",
-			systemPrompt: "Be concise",
-			permissions: {
-				mode: "ask",
-				allowedTools: ["Read(**)", "Edit(**)"],
-				disallowedTools: ["Bash"],
+		const command = buildHarnessInvocation(
+			{
+				...baseConfig,
+				model: "claude-sonnet-4-5",
+				systemPrompt: "Be concise",
+				permissions: {
+					mode: "ask",
+					allowedTools: ["Read(**)", "Edit(**)"],
+					disallowedTools: ["Bash"],
+				},
 			},
-		});
+			{ userPrompt: "Fix the failing test" },
+		);
 
 		expect(command.command).toBe("claude");
 		expect(command.args).toEqual([
@@ -63,14 +65,16 @@ describe("harness adapters", () => {
 	});
 
 	it("builds a Codex JSON command", () => {
-		const command = buildHarnessInvocation({
-			...baseConfig,
-			harness: { kind: "codex" },
-			model: "gpt-5.3-codex",
-			systemPrompt: "Use the repo style",
-			userPrompt: "Implement the feature",
-			permissions: { mode: "auto" },
-		});
+		const command = buildHarnessInvocation(
+			{
+				...baseConfig,
+				harness: { kind: "codex" },
+				model: "gpt-5.3-codex",
+				systemPrompt: "Use the repo style",
+				permissions: { mode: "auto" },
+			},
+			{ userPrompt: "Implement the feature" },
+		);
 
 		expect(command.command).toBe("codex");
 		expect(command.args).toEqual([
@@ -88,13 +92,15 @@ describe("harness adapters", () => {
 	});
 
 	it("builds a Cursor command matching headless print mode", () => {
-		const command = buildHarnessInvocation({
-			...baseConfig,
-			harness: { kind: "cursor" },
-			model: "composer-2",
-			permissions: { mode: "ask" },
-			userPrompt: "Patch the bug",
-		});
+		const command = buildHarnessInvocation(
+			{
+				...baseConfig,
+				harness: { kind: "cursor" },
+				model: "composer-2",
+				permissions: { mode: "ask" },
+			},
+			{ userPrompt: "Patch the bug" },
+		);
 
 		expect(command.command).toBe("cursor-agent");
 		expect(command.args).toEqual([
@@ -111,13 +117,15 @@ describe("harness adapters", () => {
 	});
 
 	it("builds a Gemini command with env-backed system prompt", () => {
-		const command = buildHarnessInvocation({
-			...baseConfig,
-			harness: { kind: "gemini" },
-			systemPrompt: "System text",
-			userPrompt: "Analyze this",
-			permissions: { mode: "bypass" },
-		});
+		const command = buildHarnessInvocation(
+			{
+				...baseConfig,
+				harness: { kind: "gemini" },
+				systemPrompt: "System text",
+				permissions: { mode: "bypass" },
+			},
+			{ userPrompt: "Analyze this" },
+		);
 
 		expect(command.command).toBe("gemini");
 		expect(command.args).toEqual([
@@ -135,15 +143,17 @@ describe("harness adapters", () => {
 	});
 
 	it("supports harness command and arg overrides", () => {
-		const command = buildHarnessInvocation({
-			...baseConfig,
-			harness: {
-				kind: "codex",
-				command: "/opt/bin/codex-dev",
-				args: ["--config", "profile=dev"],
+		const command = buildHarnessInvocation(
+			{
+				...baseConfig,
+				harness: {
+					kind: "codex",
+					command: "/opt/bin/codex-dev",
+					args: ["--config", "profile=dev"],
+				},
 			},
-			userPrompt: "Run it",
-		});
+			{ userPrompt: "Run it" },
+		);
 
 		expect(command.command).toBe("/opt/bin/codex-dev");
 		expect(command.args.slice(0, 2)).toEqual(["--config", "profile=dev"]);

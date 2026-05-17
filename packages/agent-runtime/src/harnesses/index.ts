@@ -41,6 +41,10 @@ export function getHarnessAdapter(kind: HarnessKind): HarnessAdapter {
 
 export function buildHarnessInvocation(
 	config: NormalizedAgentSessionConfig,
+	options: { userPrompt: string; continueSession?: boolean },
 ): HarnessCommand {
-	return getHarnessAdapter(config.harness.kind).buildCommand(config);
+	return getHarnessAdapter(config.harness.kind).buildCommand(config, {
+		userPrompt: options.userPrompt,
+		continueSession: options.continueSession ?? false,
+	});
 }

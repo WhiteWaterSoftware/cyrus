@@ -1,9 +1,17 @@
-import type { HarnessAdapter, NormalizedAgentSessionConfig } from "../types.js";
+import type {
+	HarnessAdapter,
+	HarnessRunOptions,
+	NormalizedAgentSessionConfig,
+} from "../types.js";
 import { createCommand, parseJsonLine, resolveModel } from "./common.js";
 
 export const opencodeHarness: HarnessAdapter = {
 	kind: "opencode",
-	buildCommand(config: NormalizedAgentSessionConfig) {
+	stateDirectories: [],
+	buildCommand(
+		config: NormalizedAgentSessionConfig,
+		options: HarnessRunOptions,
+	) {
 		const args = ["run", "--output-format", "json"];
 		const model = resolveModel(config);
 
@@ -11,11 +19,11 @@ export const opencodeHarness: HarnessAdapter = {
 			args.push("--model", model);
 		}
 
-		if (config.systemPrompt) {
+		if (config.systemPrompt && !options.continueSession) {
 			args.push("--system", config.systemPrompt);
 		}
 
-		args.push(config.userPrompt);
+		args.push(options.userPrompt);
 
 		return createCommand(config, "opencode", args);
 	},
