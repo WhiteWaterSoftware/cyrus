@@ -118,7 +118,6 @@ export const CreateAgentSessionConfigSchema = z.object({
 			}),
 		)
 		.optional(),
-	mcps: z.record(z.string(), z.unknown()).optional(),
 	plugins: z
 		.array(
 			z.union([

@@ -247,12 +247,12 @@ export interface CreateAgentSessionConfig {
 	files?: RuntimeFileConfig[];
 	folders?: RuntimeFolderConfig[];
 	repositories?: RuntimeRepositoryConfig[];
-	mcps?: Record<string, McpServerRuntimeConfig>;
 	/**
 	 * Bundles of MCP servers + hooks + skills materialized into the
-	 * sandbox in a harness-native form. Replaces the standalone `mcps`
-	 * field for new code; `mcps` is kept for back-compat but is currently
-	 * not wired through the runtime.
+	 * sandbox in a harness-native form. The unified plugin shape is the
+	 * only way to deliver MCP servers to a session — there is no
+	 * standalone `mcps` field. A plugin with `mcpServers` populated and
+	 * `hooks`/`skills` omitted is the standard "MCP-only" carrier.
 	 */
 	plugins?: PluginInput[];
 	permissions?: RuntimePermissionConfig;
