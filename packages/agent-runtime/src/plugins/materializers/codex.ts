@@ -26,38 +26,56 @@ export interface CodexMaterializeResult {
  * MCP servers → returned as inline `-c mcp_servers.<name>={...}` CLI
  *               overrides (no file written). Caller appends them to
  *               the codex invocation.
- * Hooks → deferred. Codex 0.130.0 has a full hooks engine
- *         (SessionStart / PreToolUse / PostToolUse / PermissionRequest /
- *         UserPromptSubmit / Stop, schema documented at
- *         https://developers.openai.com/codex/hooks), but in `codex
- *         exec` (non-interactive) mode every newly-discovered hook
- *         stays `HookTrustStatus::Untrusted` and is silently filtered
- *         before dispatch. Trust is granted via the TUI ("1 hook
- *         needs review before it can run. Open /hooks to review it.")
- *         which writes a `hooks.state.<hash>` entry into config.toml.
+ * Hooks → deferred. Codex has a full hooks engine (SessionStart /
+ *         PreToolUse / PostToolUse / PermissionRequest /
+ *         UserPromptSubmit / Stop, schema at
+ *         https://developers.openai.com/codex/hooks), but two
+ *         stacked upstream bugs make hooks materialization unusable
+ *         from `codex exec` on every release we can reach. Both are
+ *         open as of codex 0.131.0:
  *
- *         There is no working trust-bypass in 0.130.0:
+ *           1. Direct config-layer hooks regression — open as
+ *              https://github.com/openai/codex/issues/21639.
+ *              Hooks declared in `~/.codex/hooks.json` or inline as
+ *              `[[hooks.<Event>]]` in `~/.codex/config.toml` stopped
+ *              firing starting in 0.129.0. ≥5 users independently
+ *              confirmed across 0.129.0-alpha.15, 0.130.0, and
+ *              Codex Desktop 26.506.21252; we have also reproduced
+ *              on 0.131.0 with `--dangerously-bypass-hook-trust`,
+ *              `[features].hooks = true`, `[features].codex_hooks
+ *              = true`, valid JSON schema with `matcher` set, and
+ *              both fresh and warmed `CODEX_HOME`s. Was working
+ *              on 0.128.0-alpha.1 per the issue thread.
  *
- *           • The `bypass_hook_trust` field shown in the github.com
- *             /openai/codex `main` branch (`discovery.rs`) does not
- *             exist in 0.130.0 — `strings` on the installed binary
- *             returns zero occurrences of `bypass_hook_trust` /
- *             `bypass-hook-trust` / `bypassHookTrust` in any form.
- *             `--bypass-hook-trust` errors as "unexpected argument";
- *             `-c bypass_hook_trust=true` is a silent no-op because
- *             nothing reads that key.
- *           • Pre-seeding `hooks.state.<hash>` would work in principle
- *             (the trust check would pass), but the matching hash is
- *             computed from a `NormalizedHookIdentity` whose
- *             serialization is internal and unversioned across codex
- *             releases.
- *           • Plugin-bundled hooks (`[features].plugin_hooks = true`)
- *             are still under development per `codex features list`
- *             and would need the same trust step anyway.
+ *           2. Plugin manifest `hooks` field silently dropped —
+ *              open as https://github.com/openai/codex/issues/16430.
+ *              `codex-rs/core/src/plugins/manifest.rs` parses
+ *              `skills`, `mcpServers`, and `apps` but does not read
+ *              the `hooks` field at all, and `hooks/src/engine/
+ *              discovery.rs` only walks config-layer folders, never
+ *              the installed-plugin tree under `<CODEX_HOME>/
+ *              plugins/cache/<marketplace>/<plugin>/`. So even with
+ *              a fully-installed enabled plugin (verified via
+ *              `codex plugin list` reporting "(installed, enabled)")
+ *              and `[features].plugin_hooks = true` (now stable in
+ *              0.131.0), plugin-bundled hooks never register. The
+ *              `plugin_hooks` feature flag toggles a gate whose
+ *              implementation isn't shipped yet — the field is
+ *              discarded before the gate is ever checked.
  *
- *         Revisit once codex ships a stable trust-bypass CLI flag, or
- *         pre-trusts plugin-bundled hooks delivered through a
- *         marketplace the caller controls. Until then the materializer
+ *         The `--dangerously-bypass-hook-trust` flag landed in
+ *         0.131.0 (absent in 0.130.0) but doesn't help on either
+ *         path: #21639 prevents the underlying discovery from
+ *         finding any hook to bypass-trust, and #16430 prevents the
+ *         plugin manifest from contributing any hook to discovery
+ *         in the first place.
+ *
+ *         Revisit when both issues close. Earliest: ship a learning
+ *         test against the release that closes #21639 — if direct
+ *         hooks fire again, we have a fallback materialization
+ *         strategy (write to a session-local `hooks.json` under a
+ *         per-session CODEX_HOME). Adding plugin-bundled support
+ *         then waits on #16430 closing. Until then the materializer
  *         silently drops `plugin.hooks` rather than write a config
  *         tree the runtime will refuse to execute.
  *
