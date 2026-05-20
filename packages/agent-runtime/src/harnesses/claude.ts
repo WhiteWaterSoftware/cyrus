@@ -2,8 +2,24 @@ import type {
 	HarnessAdapter,
 	HarnessRunOptions,
 	NormalizedAgentSessionConfig,
+	PermissionMode,
 } from "../types.js";
 import { createCommand, parseJsonLine, resolveModel } from "./common.js";
+
+// Translate Cyrus's cross-harness PermissionMode into Claude Code's
+// `--permission-mode` CLI values. Claude accepts `acceptEdits`, `auto`,
+// `bypassPermissions`, `default`, `dontAsk`, `plan` — our enum is shaped
+// to be portable across harnesses, so a couple of values need mapping.
+function toClaudePermissionMode(mode: PermissionMode): string {
+	switch (mode) {
+		case "bypass":
+			return "bypassPermissions";
+		case "ask":
+			return "default";
+		default:
+			return mode;
+	}
+}
 
 export const claudeHarness: HarnessAdapter = {
 	kind: "claude",
@@ -37,7 +53,10 @@ export const claudeHarness: HarnessAdapter = {
 		}
 
 		if (config.permissions?.mode) {
-			args.push("--permission-mode", config.permissions.mode);
+			args.push(
+				"--permission-mode",
+				toClaudePermissionMode(config.permissions.mode),
+			);
 		}
 
 		if (config.permissions?.allowedTools?.length) {

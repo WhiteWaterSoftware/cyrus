@@ -46,19 +46,31 @@ function makeDeps(
 }
 
 describe("AgentChatSessionHandler provider selection", () => {
-	let originalDaytonaKey: string | undefined;
+	const SNAPSHOT_ENV_VARS = [
+		"DAYTONA_API_KEY",
+		"DAYTONA_SNAPSHOT",
+		"DAYTONA_WORKING_DIR",
+		"DAYTONA_CLAUDE_CLI_PATH",
+	] as const;
+	const originalEnv = new Map<string, string | undefined>();
 
 	beforeEach(() => {
-		originalDaytonaKey = process.env.DAYTONA_API_KEY;
-		delete process.env.DAYTONA_API_KEY;
+		for (const name of SNAPSHOT_ENV_VARS) {
+			originalEnv.set(name, process.env[name]);
+			delete process.env[name];
+		}
 	});
 
 	afterEach(async () => {
-		if (originalDaytonaKey === undefined) {
-			delete process.env.DAYTONA_API_KEY;
-		} else {
-			process.env.DAYTONA_API_KEY = originalDaytonaKey;
+		for (const name of SNAPSHOT_ENV_VARS) {
+			const prev = originalEnv.get(name);
+			if (prev === undefined) {
+				delete process.env[name];
+			} else {
+				process.env[name] = prev;
+			}
 		}
+		originalEnv.clear();
 	});
 
 	it("defaults to local provider when none specified and does not require DAYTONA_API_KEY", () => {
@@ -101,4 +113,136 @@ describe("AgentChatSessionHandler provider selection", () => {
 				),
 		).not.toThrow();
 	});
+
+	it("threads DAYTONA_SNAPSHOT into the Daytona sandbox config when set", () => {
+		process.env.DAYTONA_API_KEY = "fake-key-for-test";
+		process.env.DAYTONA_SNAPSHOT = "cyrus-base-v3";
+		const handler = new AgentChatSessionHandler(
+			makeAdapter(),
+			makeDeps({ provider: "daytona" }),
+			silentLogger,
+		);
+		const config = buildDaytonaConfig(handler, "snap-set");
+		expect(config.sandbox?.snapshot).toBe("cyrus-base-v3");
+	});
+
+	it("omits sandbox.snapshot when DAYTONA_SNAPSHOT is unset", () => {
+		process.env.DAYTONA_API_KEY = "fake-key-for-test";
+		const handler = new AgentChatSessionHandler(
+			makeAdapter(),
+			makeDeps({ provider: "daytona" }),
+			silentLogger,
+		);
+		const config = buildDaytonaConfig(handler, "snap-unset");
+		expect(config.sandbox?.snapshot).toBeUndefined();
+	});
+
+	it("treats whitespace-only DAYTONA_SNAPSHOT as unset", () => {
+		process.env.DAYTONA_API_KEY = "fake-key-for-test";
+		process.env.DAYTONA_SNAPSHOT = "   ";
+		const handler = new AgentChatSessionHandler(
+			makeAdapter(),
+			makeDeps({ provider: "daytona" }),
+			silentLogger,
+		);
+		const config = buildDaytonaConfig(handler, "snap-empty");
+		expect(config.sandbox?.snapshot).toBeUndefined();
+	});
+
+	it("uses default working dir, CLI path, and npm setup commands when DAYTONA_SNAPSHOT is unset", () => {
+		process.env.DAYTONA_API_KEY = "fake-key-for-test";
+		const handler = new AgentChatSessionHandler(
+			makeAdapter(),
+			makeDeps({ provider: "daytona" }),
+			silentLogger,
+		);
+		const config = buildDaytonaConfig(handler, "defaults");
+		expect(config.sandbox?.workingDirectory).toBe("/home/daytona");
+		expect(config.harness?.command).toBe(
+			"/home/daytona/.npm-global/bin/claude",
+		);
+		expect(config.packages?.commands).toEqual([
+			"npm config set prefix /home/daytona/.npm-global",
+			"npm install -g @anthropic-ai/claude-code@latest >/dev/null 2>&1",
+			"/home/daytona/.npm-global/bin/claude --version",
+		]);
+	});
+
+	it("skips npm setup and defaults claude to PATH when DAYTONA_SNAPSHOT is set", () => {
+		process.env.DAYTONA_API_KEY = "fake-key-for-test";
+		process.env.DAYTONA_SNAPSHOT = "cyrus-base-v3";
+		const handler = new AgentChatSessionHandler(
+			makeAdapter(),
+			makeDeps({ provider: "daytona" }),
+			silentLogger,
+		);
+		const config = buildDaytonaConfig(handler, "with-snapshot");
+		expect(config.harness?.command).toBe("claude");
+		expect(config.packages).toBeUndefined();
+	});
+
+	it("honors DAYTONA_WORKING_DIR override", () => {
+		process.env.DAYTONA_API_KEY = "fake-key-for-test";
+		process.env.DAYTONA_SNAPSHOT = "cyrus-base-v3";
+		process.env.DAYTONA_WORKING_DIR = "/home/cyrus";
+		const handler = new AgentChatSessionHandler(
+			makeAdapter(),
+			makeDeps({ provider: "daytona" }),
+			silentLogger,
+		);
+		const config = buildDaytonaConfig(handler, "wd-override");
+		expect(config.sandbox?.workingDirectory).toBe("/home/cyrus");
+	});
+
+	it("honors DAYTONA_CLAUDE_CLI_PATH override", () => {
+		process.env.DAYTONA_API_KEY = "fake-key-for-test";
+		process.env.DAYTONA_SNAPSHOT = "cyrus-base-v3";
+		process.env.DAYTONA_CLAUDE_CLI_PATH = "/usr/local/bin/claude";
+		const handler = new AgentChatSessionHandler(
+			makeAdapter(),
+			makeDeps({ provider: "daytona" }),
+			silentLogger,
+		);
+		const config = buildDaytonaConfig(handler, "cli-override");
+		expect(config.harness?.command).toBe("/usr/local/bin/claude");
+	});
+
+	it("bypasses Claude permission prompts for Daytona sessions", () => {
+		process.env.DAYTONA_API_KEY = "fake-key-for-test";
+		const handler = new AgentChatSessionHandler(
+			makeAdapter(),
+			makeDeps({ provider: "daytona" }),
+			silentLogger,
+		);
+		const config = buildDaytonaConfig(handler, "perm-bypass");
+		expect(config.permissions?.mode).toBe("bypass");
+	});
 });
+
+interface DaytonaSessionConfigShape {
+	harness?: { command?: string };
+	packages?: { commands?: string[] };
+	permissions?: { mode?: string };
+	sandbox?: { workingDirectory?: string; snapshot?: string };
+}
+
+function buildDaytonaConfig(
+	handler: AgentChatSessionHandler<unknown>,
+	sessionId: string,
+): DaytonaSessionConfigShape {
+	return (
+		handler as unknown as {
+			buildSessionConfig: (args: {
+				sessionId: string;
+				threadKey: string;
+				systemPrompt: string;
+				credential: { kind: "apiKey"; token: string };
+			}) => DaytonaSessionConfigShape;
+		}
+	).buildSessionConfig({
+		sessionId,
+		threadKey: `thread-${sessionId}`,
+		systemPrompt: "sys",
+		credential: { kind: "apiKey", token: "tok" },
+	});
+}

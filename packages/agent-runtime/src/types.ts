@@ -263,6 +263,14 @@ export interface RuntimeSandboxConfig {
 	namespace?: string;
 	workingDirectory?: string;
 	templateId?: string;
+	/**
+	 * Optional snapshot identifier to seed the sandbox from. For the
+	 * Daytona provider this maps to the Daytona snapshot name — when set,
+	 * the sandbox boots from that pre-built snapshot instead of the
+	 * default base image. Ignored by providers that do not have a
+	 * snapshot concept.
+	 */
+	snapshot?: string;
 	timeoutMs?: number;
 	metadata?: Record<string, unknown>;
 	volumes?: RuntimeVolumeConfig[];

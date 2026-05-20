@@ -30,6 +30,17 @@ describe("AgentRuntime", () => {
 		});
 	});
 
+	it("preserves sandbox.snapshot through normalization", () => {
+		const config = normalizeConfig({
+			harness: "claude",
+			sandbox: {
+				provider: "daytona",
+				snapshot: "cyrus-base-v3",
+			},
+		});
+		expect(config.sandbox.snapshot).toBe("cyrus-base-v3");
+	});
+
 	it("runs a session through an injected sandbox provider", async () => {
 		const sandbox = new FakeSandbox(
 			[

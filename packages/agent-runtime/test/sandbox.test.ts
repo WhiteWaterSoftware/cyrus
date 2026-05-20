@@ -220,6 +220,7 @@ describe("ComputeSdkSandboxProvider", () => {
 				{
 					timeout: 10_000,
 					templateId: "template-1",
+					snapshotId: undefined,
 					metadata: { issue: "CYR-1" },
 					namespace: undefined,
 					name: "agent-runtime-test",
@@ -346,6 +347,46 @@ describe("ComputeSdkSandboxProvider", () => {
 			/^executeSessionCommand:agent-runtime-stream-[^:]+:cd "\/home\/daytona" && FOO="bar" claude -p hi --output-format stream-json:async=true$/,
 		);
 		expect(events[2]).toMatch(/^deleteSession:agent-runtime-stream-/);
+	});
+
+	it("forwards RuntimeSandboxConfig.snapshot as snapshotId on create", async () => {
+		let received: Record<string, unknown> | undefined;
+		const fakeSandbox: ComputeSdkSandboxLike = {
+			sandboxId: "sbx_snap",
+			provider: "daytona",
+			filesystem: {
+				async readFile() {
+					return "";
+				},
+				async writeFile() {},
+				async mkdir() {},
+				async readdir() {
+					return [];
+				},
+				async exists() {
+					return false;
+				},
+				async remove() {},
+			},
+			async runCommand() {
+				return { stdout: "", stderr: "", exitCode: 0, durationMs: 0 };
+			},
+			async destroy() {},
+		};
+		const compute = {
+			sandbox: {
+				async create(options: Record<string, unknown>) {
+					received = options;
+					return fakeSandbox;
+				},
+			},
+		};
+		const provider = createComputeSdkSandboxProvider({ compute });
+		await provider.create({
+			provider: "daytona",
+			snapshot: "cyrus-base-v3",
+		});
+		expect(received?.snapshotId).toBe("cyrus-base-v3");
 	});
 
 	it("streamCommand rejects when the underlying provider has no streaming primitive", async () => {

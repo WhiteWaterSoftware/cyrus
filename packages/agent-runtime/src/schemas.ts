@@ -37,6 +37,7 @@ export const RuntimeSandboxConfigSchema = z.object({
 	namespace: z.string().optional(),
 	workingDirectory: z.string().optional(),
 	templateId: z.string().optional(),
+	snapshot: z.string().optional(),
 	timeoutMs: z.number().int().positive().optional(),
 	metadata: z.record(z.string(), z.unknown()).optional(),
 	volumes: z

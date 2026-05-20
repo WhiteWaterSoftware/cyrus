@@ -54,13 +54,28 @@ describe("harness adapters", () => {
 			"claude-sonnet-4-5",
 			"--append-system-prompt",
 			"Be concise",
+			// "ask" maps to Claude's "default" — Claude's CLI does not
+			// accept "ask" verbatim.
 			"--permission-mode",
-			"ask",
+			"default",
 			"--allowedTools",
 			"Read(**),Edit(**)",
 			"--disallowedTools",
 			"Bash",
 		]);
+	});
+
+	it("maps Cyrus's PermissionMode 'bypass' to Claude's 'bypassPermissions'", () => {
+		const command = buildHarnessInvocation(
+			{
+				...baseConfig,
+				permissions: { mode: "bypass" },
+			},
+			{ userPrompt: "do it" },
+		);
+		expect(command.args).toContain("--permission-mode");
+		const idx = command.args.indexOf("--permission-mode");
+		expect(command.args[idx + 1]).toBe("bypassPermissions");
 	});
 
 	it("builds a Codex JSON command", () => {

@@ -111,6 +111,7 @@ export class ComputeSdkSandboxProvider implements SandboxProvider {
 		return this.options.compute.sandbox.create({
 			timeout: config.timeoutMs,
 			templateId: config.templateId,
+			snapshotId: config.snapshot,
 			metadata: config.metadata,
 			namespace: config.namespace,
 			name: config.name,

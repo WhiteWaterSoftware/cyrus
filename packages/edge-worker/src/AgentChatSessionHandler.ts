@@ -50,10 +50,23 @@ export interface AgentChatSessionHandlerDeps<TEvent = unknown> {
 	 *   `claude` on `PATH` (or `claudeCliPath` set). No `DAYTONA_API_KEY`
 	 *   required. `destroyWhileInactive` is a no-op for this provider.
 	 * - `"daytona"`: each thread gets a Daytona sandbox. Requires
-	 *   `DAYTONA_API_KEY` in the environment; Claude CLI is installed
-	 *   inside the sandbox via `npm install -g`. Idle sandboxes are
-	 *   paused between turns (preserving on-disk state for `--continue`)
-	 *   and destroyed after the idle TTL.
+	 *   `DAYTONA_API_KEY` in the environment; by default Claude CLI is
+	 *   installed inside the sandbox via `npm install -g`. Idle sandboxes
+	 *   are paused between turns (preserving on-disk state for
+	 *   `--continue`) and destroyed after the idle TTL.
+	 *
+	 *   Optional env vars:
+	 *   - `DAYTONA_SNAPSHOT`: pre-built Daytona snapshot to seed the
+	 *     sandbox from. When set, the npm-install setup is skipped (the
+	 *     snapshot is expected to have Claude preinstalled) and the CLI
+	 *     path defaults to `claude` on `PATH`.
+	 *   - `DAYTONA_WORKING_DIR`: home/working directory inside the
+	 *     sandbox (default `/home/daytona`). Set this when your snapshot
+	 *     uses a different user, e.g. `/home/cyrus`.
+	 *   - `DAYTONA_CLAUDE_CLI_PATH`: absolute path to the `claude`
+	 *     binary inside the sandbox. Defaults to
+	 *     `<workingDir>/.npm-global/bin/claude` without a snapshot, or
+	 *     `claude` (PATH-resolved) with a snapshot.
 	 */
 	provider?: ProviderType;
 	/**
@@ -88,20 +101,32 @@ export interface AgentChatSessionHandlerDeps<TEvent = unknown> {
 const DEFAULT_IDLE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 // Default Daytona working directory — matches the directory used in the
-// streaming spike that validated this end-to-end. Daytona's container puts
-// the user at /home/daytona.
-const DAYTONA_WORKING_DIR = "/home/daytona";
+// streaming spike that validated this end-to-end. Daytona's default base
+// image puts the user at /home/daytona; custom snapshots may use a
+// different layout (overridable via DAYTONA_WORKING_DIR).
+const DEFAULT_DAYTONA_WORKING_DIR = "/home/daytona";
 
-// Where claude lands after `npm install -g` with our custom npm prefix.
-const CLAUDE_CLI_PATH = `${DAYTONA_WORKING_DIR}/.npm-global/bin/claude`;
+// Default claude binary path for the default base image — where `claude`
+// lands after `npm install -g` with our custom npm prefix. When a custom
+// snapshot is in use, the default switches to `claude` (resolved via the
+// sandbox PATH) since the snapshot author owns the install layout.
+function defaultClaudeCliPath(workingDir: string): string {
+	return `${workingDir}/.npm-global/bin/claude`;
+}
 
-// Setup commands that run inside the fresh Daytona sandbox before the
-// harness invocation. Each runs via the sandbox's default shell PATH.
-const DAYTONA_CLAUDE_SETUP_COMMANDS = [
-	`npm config set prefix ${DAYTONA_WORKING_DIR}/.npm-global`,
-	"npm install -g @anthropic-ai/claude-code@latest >/dev/null 2>&1",
-	`${CLAUDE_CLI_PATH} --version`,
-];
+// Setup commands that run inside a fresh Daytona sandbox before the
+// harness invocation. Used only when no custom snapshot is supplied —
+// a custom snapshot is expected to have Claude preinstalled.
+function buildDefaultClaudeSetupCommands(
+	workingDir: string,
+	cliPath: string,
+): string[] {
+	return [
+		`npm config set prefix ${workingDir}/.npm-global`,
+		"npm install -g @anthropic-ai/claude-code@latest >/dev/null 2>&1",
+		`${cliPath} --version`,
+	];
+}
 
 /**
  * Discriminated union of the two Claude auth modes the handler accepts.
@@ -258,6 +283,10 @@ export class AgentChatSessionHandler<TEvent> {
 	private readonly threadSessions = new Map<string, ThreadState<TEvent>>();
 	private readonly provider: ProviderType;
 	private readonly daytonaApiKey: string | undefined;
+	private readonly daytonaSnapshot: string | undefined;
+	private readonly daytonaWorkingDir: string;
+	private readonly daytonaClaudeCliPath: string;
+	private readonly daytonaSetupCommands: readonly string[];
 	private readonly claudeCliPath: string | undefined;
 	private readonly idleTtlMs: number;
 	private idleSweepTimer?: NodeJS.Timeout;
@@ -286,8 +315,34 @@ export class AgentChatSessionHandler<TEvent> {
 				);
 			}
 			this.daytonaApiKey = apiKey;
+			this.daytonaSnapshot = process.env.DAYTONA_SNAPSHOT?.trim() || undefined;
+			this.daytonaWorkingDir =
+				process.env.DAYTONA_WORKING_DIR?.trim() || DEFAULT_DAYTONA_WORKING_DIR;
+			// With a custom snapshot the install layout belongs to the
+			// snapshot author, so default to `claude` on PATH; without one
+			// we drive the install ourselves under the working dir.
+			const defaultCliPath = this.daytonaSnapshot
+				? "claude"
+				: defaultClaudeCliPath(this.daytonaWorkingDir);
+			this.daytonaClaudeCliPath =
+				process.env.DAYTONA_CLAUDE_CLI_PATH?.trim() || defaultCliPath;
+			// A custom snapshot is expected to have Claude preinstalled,
+			// so the npm-install setup is skipped. Without a snapshot we
+			// install Claude into the working dir on every cold start.
+			this.daytonaSetupCommands = this.daytonaSnapshot
+				? []
+				: buildDefaultClaudeSetupCommands(
+						this.daytonaWorkingDir,
+						this.daytonaClaudeCliPath,
+					);
 		} else {
 			this.daytonaApiKey = undefined;
+			this.daytonaSnapshot = undefined;
+			this.daytonaWorkingDir = DEFAULT_DAYTONA_WORKING_DIR;
+			this.daytonaClaudeCliPath = defaultClaudeCliPath(
+				DEFAULT_DAYTONA_WORKING_DIR,
+			);
+			this.daytonaSetupCommands = [];
 		}
 
 		this.idleTtlMs = deps.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
@@ -562,24 +617,30 @@ export class AgentChatSessionHandler<TEvent> {
 				sessionId,
 				harness: {
 					kind: "claude",
-					command: CLAUDE_CLI_PATH,
+					command: this.daytonaClaudeCliPath,
 				},
 				systemPrompt,
 				secrets,
-				packages: {
-					commands: [...DAYTONA_CLAUDE_SETUP_COMMANDS],
-				},
+				// The Daytona sandbox is the isolation boundary, so
+				// permission prompts inside it are noise — bypass them
+				// so the agent can use Bash/Read/Write etc. without
+				// blocking on prompts that no user will ever answer.
+				permissions: { mode: "bypass" },
+				...(this.daytonaSetupCommands.length > 0
+					? { packages: { commands: [...this.daytonaSetupCommands] } }
+					: {}),
 				...(plugins ? { plugins } : {}),
 				sandbox: {
 					provider: "daytona",
 					name: `cyrus-${this.adapter.platformName}-${sessionId}`,
-					workingDirectory: DAYTONA_WORKING_DIR,
+					workingDirectory: this.daytonaWorkingDir,
 					timeoutMs: 300_000,
 					// Pause the sandbox between turns so we stop paying for
 					// idle compute. Daytona preserves on-disk state during
 					// stop, so the next turn's `--continue` finds the prior
 					// `.claude/` intact.
 					destroyWhileInactive: true,
+					...(this.daytonaSnapshot ? { snapshot: this.daytonaSnapshot } : {}),
 					metadata: {
 						purpose: `cyrus-${this.adapter.platformName}-chat`,
 						threadKey,
