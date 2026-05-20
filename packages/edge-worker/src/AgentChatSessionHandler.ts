@@ -137,28 +137,40 @@ function buildDefaultClaudeSetupCommands(
 }
 
 /**
- * Discriminated union of the two Claude auth modes the handler accepts.
+ * Discriminated union of the three Claude auth modes the handler accepts.
  * They are NOT interchangeable — Claude Code treats them as different
- * sources with different billing semantics, so we preserve which one
- * came in and forward only that env var to the harness.
+ * sources with different billing / proxy semantics, so we preserve which
+ * one came in and forward only that env var to the harness.
  *
  * - `oauth`: token from `CLAUDE_CODE_OAUTH_TOKEN` (Claude Code Pro/Max
  *   subscription).
  * - `apiKey`: key from `ANTHROPIC_API_KEY` (direct Anthropic API
  *   access).
+ * - `authToken`: token from `ANTHROPIC_AUTH_TOKEN` (used by deployments
+ *   that point Claude Code at an Anthropic-compatible proxy / gateway;
+ *   the existing claude-runner forwards this env var alongside the
+ *   other two — see `packages/claude-runner/src/session-env.ts`'s
+ *   `AUTH_ENV_KEYS`).
  */
-type ClaudeCredential =
+export type ClaudeCredential =
 	| { kind: "oauth"; token: string }
-	| { kind: "apiKey"; token: string };
+	| { kind: "apiKey"; token: string }
+	| { kind: "authToken"; token: string };
 
-function readClaudeCredential(): ClaudeCredential | undefined {
+export function readClaudeCredential(): ClaudeCredential | undefined {
 	// OAuth takes precedence: subscription users running Claude Code
-	// against their plan generally want that to be the active path
-	// even if an `ANTHROPIC_API_KEY` happens to be set in the env.
+	// against their plan generally want that to be the active path even
+	// if one of the Anthropic-key env vars happens to be set. Then
+	// ANTHROPIC_API_KEY, then ANTHROPIC_AUTH_TOKEN — matches the
+	// AUTH_ENV_KEYS order in claude-runner/src/session-env.ts so the
+	// chat handler and the legacy runner pick the same one on hosts
+	// that have multiple set.
 	const oauth = process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim();
 	if (oauth) return { kind: "oauth", token: oauth };
 	const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
 	if (apiKey) return { kind: "apiKey", token: apiKey };
+	const authToken = process.env.ANTHROPIC_AUTH_TOKEN?.trim();
+	if (authToken) return { kind: "authToken", token: authToken };
 	return undefined;
 }
 
@@ -410,13 +422,13 @@ export class AgentChatSessionHandler<TEvent> {
 			const credential = readClaudeCredential();
 			if (!credential) {
 				this.logger.error(
-					"Cannot run chat session: no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in environment",
+					"Cannot run chat session: no CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, or ANTHROPIC_AUTH_TOKEN in environment",
 				);
 				await this.adapter.postReply(
 					event,
 					"I'm not configured with a Claude credential, so I can't respond. " +
-						"Ask your admin to set either CLAUDE_CODE_OAUTH_TOKEN (Claude Code subscription) " +
-						"or ANTHROPIC_API_KEY (direct API access).",
+						"Ask your admin to set one of CLAUDE_CODE_OAUTH_TOKEN (Claude Code subscription), " +
+						"ANTHROPIC_API_KEY (direct API access), or ANTHROPIC_AUTH_TOKEN (proxy / gateway).",
 				);
 				return;
 			}
@@ -603,14 +615,17 @@ export class AgentChatSessionHandler<TEvent> {
 	}): CreateAgentSessionConfigFor<"claude"> {
 		const { sessionId, threadKey, systemPrompt, credential, mcpServers } = args;
 		// Forward exactly the env var the operator actually set. Setting
-		// both would be a bug: Claude Code treats `CLAUDE_CODE_OAUTH_TOKEN`
-		// (Claude Code subscription OAuth flow) and `ANTHROPIC_API_KEY`
-		// (direct Anthropic API access) as distinct auth modes with
-		// different billing, so they must not be conflated.
+		// more than one would be a bug: Claude Code treats
+		// `CLAUDE_CODE_OAUTH_TOKEN` (subscription OAuth), `ANTHROPIC_API_KEY`
+		// (direct API access), and `ANTHROPIC_AUTH_TOKEN` (proxy-style
+		// auth) as distinct auth modes with different billing / routing,
+		// so they must not be conflated.
 		const secrets: Record<string, string> =
 			credential.kind === "oauth"
 				? { CLAUDE_CODE_OAUTH_TOKEN: credential.token }
-				: { ANTHROPIC_API_KEY: credential.token };
+				: credential.kind === "apiKey"
+					? { ANTHROPIC_API_KEY: credential.token }
+					: { ANTHROPIC_AUTH_TOKEN: credential.token };
 		// Wrap the chat-session MCP servers into a single anonymous
 		// RuntimePlugin so the runtime materializer fans them out into
 		// the harness's native MCP config surface. Omitted entirely when

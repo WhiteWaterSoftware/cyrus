@@ -654,15 +654,22 @@ describe("AgentRuntime", () => {
 		expect(paths).toContain(
 			"/work/.cyrus-plugins/demo/.claude-plugin/plugin.json",
 		);
+		// The per-plugin `.mcp.json` is still written — it's part of the
+		// documented Claude plugin layout that `--plugin-dir` consumers
+		// expect. The canonical handoff target for `--mcp-config` is the
+		// session-level combined file (see next assertion).
 		expect(paths).toContain("/work/.cyrus-plugins/demo/.mcp.json");
+		expect(paths).toContain("/work/.cyrus-plugins/.mcp.combined.json");
 		expect(paths).toContain("/work/.cyrus-plugins/demo/hooks/hooks.json");
 		expect(paths).toContain("/work/.cyrus-plugins/demo/skills/hi/SKILL.md");
 
 		// Harness command got --plugin-dir + --mcp-config + --strict-mcp-config.
+		// --mcp-config points at the combined file (a single scalar that
+		// aggregates every plugin's mcpServers), not the per-plugin file.
 		const harnessCmd = sandbox.commands.at(-1)!.command;
 		expect(harnessCmd).toContain("--plugin-dir /work/.cyrus-plugins/demo");
 		expect(harnessCmd).toContain(
-			"--mcp-config /work/.cyrus-plugins/demo/.mcp.json",
+			"--mcp-config /work/.cyrus-plugins/.mcp.combined.json",
 		);
 		expect(harnessCmd).toContain("--strict-mcp-config");
 
@@ -678,6 +685,139 @@ describe("AgentRuntime", () => {
 		expect(skillFile.content).toContain("name: hi");
 		expect(skillFile.content).toContain("description: Greet the user.");
 		expect(skillFile.content).toContain("Say hi.");
+	});
+
+	it("merges MCP servers across multiple Claude plugins into one --mcp-config", async () => {
+		// Regression guard. The Claude `--mcp-config` flag is a single
+		// scalar path. Earlier this code overwrote `claudeMcpConfigPath`
+		// per plugin, so multi-plugin sessions silently dropped every
+		// plugin's MCP servers except the last (and `--strict-mcp-config`
+		// made that fatal for tool calls into the dropped servers).
+		const sandbox = new FakeSandbox(
+			JSON.stringify({
+				type: "result",
+				subtype: "success",
+				result: "ok",
+			}),
+		);
+		const session = await createAgentSession(
+			{
+				sessionId: "session-plugin-claude-merge",
+				harness: { kind: "claude" },
+				sandbox: { provider: "local", workingDirectory: "/work" },
+				plugins: [
+					{
+						name: "alpha",
+						mcpServers: {
+							alphaTool: { command: "alpha-bin", args: ["--port=1"] },
+						},
+					},
+					{
+						name: "beta",
+						mcpServers: {
+							betaTool: { command: "beta-bin", args: ["--port=2"] },
+						},
+					},
+					{
+						name: "gamma",
+						mcpServers: {
+							gammaTool: { url: "https://gamma.example/sse", type: "sse" },
+						},
+					},
+				],
+			},
+			{ sandboxProviders: { local: new FakeSandboxProvider(sandbox) } },
+		);
+		const result = await session.run("hello");
+		expect(result.success).toBe(true);
+
+		// Every plugin's per-plugin `.mcp.json` was still written (the
+		// documented Claude plugin layout), AND a session-level combined
+		// file exists.
+		const paths = sandbox.files.map((f) => f.path);
+		expect(paths).toContain("/work/.cyrus-plugins/alpha/.mcp.json");
+		expect(paths).toContain("/work/.cyrus-plugins/beta/.mcp.json");
+		expect(paths).toContain("/work/.cyrus-plugins/gamma/.mcp.json");
+		expect(paths).toContain("/work/.cyrus-plugins/.mcp.combined.json");
+
+		// Combined file has every plugin's servers under one `mcpServers`
+		// map. Order doesn't matter; presence does.
+		const combined = JSON.parse(
+			sandbox.files.find(
+				(f) => f.path === "/work/.cyrus-plugins/.mcp.combined.json",
+			)!.content,
+		);
+		expect(Object.keys(combined.mcpServers).sort()).toEqual([
+			"alphaTool",
+			"betaTool",
+			"gammaTool",
+		]);
+		expect(combined.mcpServers.alphaTool).toEqual({
+			command: "alpha-bin",
+			args: ["--port=1"],
+		});
+		expect(combined.mcpServers.gammaTool).toEqual({
+			url: "https://gamma.example/sse",
+			type: "sse",
+		});
+
+		// Harness command points `--mcp-config` at the combined file
+		// (one scalar, every plugin's servers reachable) — not the
+		// last plugin's per-plugin file.
+		const harnessCmd = sandbox.commands.at(-1)!.command;
+		expect(harnessCmd).toContain(
+			"--mcp-config /work/.cyrus-plugins/.mcp.combined.json",
+		);
+		expect(harnessCmd).not.toContain(
+			"--mcp-config /work/.cyrus-plugins/gamma/.mcp.json",
+		);
+		// All three plugin dirs reach the CLI as `--plugin-dir`.
+		expect(harnessCmd).toContain("--plugin-dir /work/.cyrus-plugins/alpha");
+		expect(harnessCmd).toContain("--plugin-dir /work/.cyrus-plugins/beta");
+		expect(harnessCmd).toContain("--plugin-dir /work/.cyrus-plugins/gamma");
+	});
+
+	it("prefers later-listed Claude plugin's server on duplicate names", async () => {
+		// Plugin order is caller-supplied, so the caller can deliberately
+		// shadow an earlier server by listing the replacement plugin later.
+		// We document and lock in that precedence here.
+		const sandbox = new FakeSandbox(
+			JSON.stringify({
+				type: "result",
+				subtype: "success",
+				result: "ok",
+			}),
+		);
+		const session = await createAgentSession(
+			{
+				sessionId: "session-plugin-claude-shadow",
+				harness: { kind: "claude" },
+				sandbox: { provider: "local", workingDirectory: "/work" },
+				plugins: [
+					{
+						name: "base",
+						mcpServers: {
+							shared: { command: "old-bin" },
+						},
+					},
+					{
+						name: "override",
+						mcpServers: {
+							shared: { command: "new-bin" },
+						},
+					},
+				],
+			},
+			{ sandboxProviders: { local: new FakeSandboxProvider(sandbox) } },
+		);
+		await session.run("hello");
+
+		const combined = JSON.parse(
+			sandbox.files.find(
+				(f) => f.path === "/work/.cyrus-plugins/.mcp.combined.json",
+			)!.content,
+		);
+		expect(combined.mcpServers.shared).toEqual({ command: "new-bin" });
 	});
 
 	it("materializes sensitive files before setup without exposing contents", async () => {

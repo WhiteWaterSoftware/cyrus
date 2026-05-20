@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	AgentChatSessionHandler,
 	type ChatPlatformAdapter,
+	readClaudeCredential,
 } from "../src/AgentChatSessionHandler.js";
 
 const silentLogger: ILogger = {
@@ -227,11 +228,16 @@ interface DaytonaSessionConfigShape {
 	packages?: { commands?: string[] };
 	permissions?: { mode?: string };
 	sandbox?: { workingDirectory?: string; snapshot?: string };
+	secrets?: Record<string, { value: string } | string>;
 }
 
 function buildDaytonaConfig(
 	handler: AgentChatSessionHandler<unknown>,
 	sessionId: string,
+	credential: {
+		kind: "oauth" | "apiKey" | "authToken";
+		token: string;
+	} = { kind: "apiKey", token: "tok" },
 ): DaytonaSessionConfigShape {
 	return (
 		handler as unknown as {
@@ -239,13 +245,149 @@ function buildDaytonaConfig(
 				sessionId: string;
 				threadKey: string;
 				systemPrompt: string;
-				credential: { kind: "apiKey"; token: string };
+				credential: typeof credential;
 			}) => DaytonaSessionConfigShape;
 		}
 	).buildSessionConfig({
 		sessionId,
 		threadKey: `thread-${sessionId}`,
 		systemPrompt: "sys",
-		credential: { kind: "apiKey", token: "tok" },
+		credential,
 	});
 }
+
+describe("AgentChatSessionHandler credential detection", () => {
+	const CRED_ENV_VARS = [
+		"CLAUDE_CODE_OAUTH_TOKEN",
+		"ANTHROPIC_API_KEY",
+		"ANTHROPIC_AUTH_TOKEN",
+	] as const;
+	const originalEnv = new Map<string, string | undefined>();
+
+	beforeEach(() => {
+		for (const name of CRED_ENV_VARS) {
+			originalEnv.set(name, process.env[name]);
+			delete process.env[name];
+		}
+	});
+
+	afterEach(() => {
+		for (const name of CRED_ENV_VARS) {
+			const prev = originalEnv.get(name);
+			if (prev === undefined) {
+				delete process.env[name];
+			} else {
+				process.env[name] = prev;
+			}
+		}
+		originalEnv.clear();
+	});
+
+	it("returns undefined when no credential env var is set", () => {
+		expect(readClaudeCredential()).toBeUndefined();
+	});
+
+	it("detects ANTHROPIC_AUTH_TOKEN when it is the only one set", () => {
+		// Regression guard — earlier revision of this handler dropped
+		// ANTHROPIC_AUTH_TOKEN entirely, which broke deployments that
+		// auth Claude via a proxy/gateway. The legacy claude-runner
+		// (packages/claude-runner/src/session-env.ts AUTH_ENV_KEYS) still
+		// forwards this env var, so the chat handler must accept it too.
+		process.env.ANTHROPIC_AUTH_TOKEN = "auth-token-value";
+		expect(readClaudeCredential()).toEqual({
+			kind: "authToken",
+			token: "auth-token-value",
+		});
+	});
+
+	it("CLAUDE_CODE_OAUTH_TOKEN > ANTHROPIC_API_KEY > ANTHROPIC_AUTH_TOKEN", () => {
+		// Precedence matches claude-runner's AUTH_ENV_KEYS scan order
+		// so the chat handler and the legacy runner pick the same one
+		// on hosts that have multiple set.
+		process.env.CLAUDE_CODE_OAUTH_TOKEN = "oauth";
+		process.env.ANTHROPIC_API_KEY = "api";
+		process.env.ANTHROPIC_AUTH_TOKEN = "auth";
+		expect(readClaudeCredential()).toEqual({ kind: "oauth", token: "oauth" });
+
+		delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+		expect(readClaudeCredential()).toEqual({ kind: "apiKey", token: "api" });
+
+		delete process.env.ANTHROPIC_API_KEY;
+		expect(readClaudeCredential()).toEqual({
+			kind: "authToken",
+			token: "auth",
+		});
+	});
+
+	it("trims whitespace-only env vars to empty / undefined", () => {
+		process.env.ANTHROPIC_AUTH_TOKEN = "   ";
+		expect(readClaudeCredential()).toBeUndefined();
+	});
+});
+
+describe("AgentChatSessionHandler credential forwarding", () => {
+	const SNAPSHOT_ENV_VARS = ["DAYTONA_API_KEY"] as const;
+	const originalEnv = new Map<string, string | undefined>();
+
+	beforeEach(() => {
+		for (const name of SNAPSHOT_ENV_VARS) {
+			originalEnv.set(name, process.env[name]);
+			delete process.env[name];
+		}
+		process.env.DAYTONA_API_KEY = "dt-test";
+	});
+
+	afterEach(() => {
+		for (const name of SNAPSHOT_ENV_VARS) {
+			const prev = originalEnv.get(name);
+			if (prev === undefined) {
+				delete process.env[name];
+			} else {
+				process.env[name] = prev;
+			}
+		}
+		originalEnv.clear();
+	});
+
+	function makeHandler(): AgentChatSessionHandler<unknown> {
+		return new AgentChatSessionHandler(
+			{ adapter: makeAdapter(), provider: "daytona" },
+			makeDeps(),
+			silentLogger,
+		);
+	}
+
+	it("forwards CLAUDE_CODE_OAUTH_TOKEN for kind='oauth'", () => {
+		const config = buildDaytonaConfig(makeHandler(), "cred-oauth", {
+			kind: "oauth",
+			token: "oauth-token",
+		});
+		expect(config.secrets?.CLAUDE_CODE_OAUTH_TOKEN).toBe("oauth-token");
+		expect(config.secrets?.ANTHROPIC_API_KEY).toBeUndefined();
+		expect(config.secrets?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+	});
+
+	it("forwards ANTHROPIC_API_KEY for kind='apiKey'", () => {
+		const config = buildDaytonaConfig(makeHandler(), "cred-api", {
+			kind: "apiKey",
+			token: "api-key",
+		});
+		expect(config.secrets?.ANTHROPIC_API_KEY).toBe("api-key");
+		expect(config.secrets?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+		expect(config.secrets?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+	});
+
+	it("forwards ANTHROPIC_AUTH_TOKEN for kind='authToken'", () => {
+		// Mirrors the kind='apiKey' assertion. With Claude Code's distinct
+		// auth-mode handling, sending two of these env vars at once would
+		// conflate billing / routing, so the handler picks one and only
+		// sets that one — verify the right one ships through.
+		const config = buildDaytonaConfig(makeHandler(), "cred-auth", {
+			kind: "authToken",
+			token: "auth-token",
+		});
+		expect(config.secrets?.ANTHROPIC_AUTH_TOKEN).toBe("auth-token");
+		expect(config.secrets?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+		expect(config.secrets?.ANTHROPIC_API_KEY).toBeUndefined();
+	});
+});

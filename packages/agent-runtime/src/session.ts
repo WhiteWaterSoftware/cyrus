@@ -18,6 +18,7 @@ import type {
 	AgentSession,
 	AgentSessionResult,
 	HarnessAdapter,
+	McpServerRuntimeConfig,
 	NormalizedAgentSessionConfig,
 	RunnerSandbox,
 	RuntimeCallbacks,
@@ -711,6 +712,17 @@ export class RuntimeAgentSession extends EventEmitter {
 				? this.sessionStateDir
 				: workspaceRoot;
 
+		// Claude's `--mcp-config` flag is a single path — feeding it the
+		// last plugin's per-plugin `.mcp.json` would silently drop earlier
+		// plugins' servers (especially harmful with `--strict-mcp-config`).
+		// Accumulate every plugin's mcpServers map and, after the loop,
+		// write one combined config that `--mcp-config` points at. The
+		// per-plugin `.mcp.json` files inside each plugin dir are still
+		// written by the materializer because they're part of the documented
+		// Claude plugin layout (used by `--plugin-dir` consumers); the
+		// aggregated file is purely the handoff target for `--mcp-config`.
+		const combinedClaudeMcpServers: Record<string, McpServerRuntimeConfig> = {};
+
 		for (const input of plugins) {
 			const plugin = await resolvePlugin(input);
 			await this.emitEvent(
@@ -727,8 +739,15 @@ export class RuntimeAgentSession extends EventEmitter {
 						claudePluginsRoot,
 					);
 					this.pluginOutputs.claudePluginDirs.push(out.pluginDir);
-					if (out.mcpConfigPath) {
-						this.pluginOutputs.claudeMcpConfigPath = out.mcpConfigPath;
+					if (plugin.mcpServers) {
+						// Later-wins on duplicate server names — same precedence
+						// you'd get if a user hand-merged two `.mcp.json` files
+						// by spreading them in order. Plugin order is caller-
+						// supplied via `config.plugins`, so the caller can
+						// reorder if a specific shadow is desired.
+						for (const [name, server] of Object.entries(plugin.mcpServers)) {
+							combinedClaudeMcpServers[name] = server;
+						}
 					}
 					await this.emitEvent(
 						this.createEvent("plugin.materialize.completed", {
@@ -791,6 +810,21 @@ export class RuntimeAgentSession extends EventEmitter {
 				);
 				throw err;
 			}
+		}
+
+		// Emit the combined Claude MCP config (one file holding every
+		// plugin's mcpServers) and use it as the single `--mcp-config`
+		// value. Skip when no plugin contributed any servers.
+		if (
+			this.harness === "claude" &&
+			Object.keys(combinedClaudeMcpServers).length > 0
+		) {
+			const combinedPath = `${claudePluginsRoot}/.mcp.combined.json`;
+			await this.sandbox.filesystem.writeFile(
+				combinedPath,
+				JSON.stringify({ mcpServers: combinedClaudeMcpServers }, null, 2),
+			);
+			this.pluginOutputs.claudeMcpConfigPath = combinedPath;
 		}
 	}
 
