@@ -722,6 +722,12 @@ export class EdgeWorker extends EventEmitter {
 					this.handleWebhook(event as unknown as Webhook, repos);
 				});
 
+				// Listen for unified internal messages (used by F1 to emit
+				// IssueStateChangeMessage when an issue is terminated).
+				cliEventTransport.on("message", (message: InternalMessage) => {
+					this.handleMessage(message);
+				});
+
 				// Listen for errors
 				cliEventTransport.on("error", (error: Error) => {
 					this.handleError(error);

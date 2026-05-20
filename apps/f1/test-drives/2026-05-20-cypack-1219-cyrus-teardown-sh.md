@@ -8,7 +8,7 @@
 
 - ✅ Setup-hook regression check passed — the refactored `runHookScript` helper still runs `cyrus-setup.sh` with the correct `cwd` and `LINEAR_ISSUE_IDENTIFIER` env.
 - ✅ Stop-session does **not** fire teardown (intended — unassign is preserved-worktree behavior).
-- ⛔ **End-to-end teardown firing could not be exercised through F1**. The F1 CLI exposes no terminal-state transition, and `CLIIssueTrackerService.updateIssue` does not translate `stateId` changes into an `IssueStateChangeMessage` on the message bus. Unit tests in `packages/edge-worker/test/GitService.test.ts` cover the teardown path (happy/missing/failing/multi-repo/timeout/etc., 10 scenarios). To validate end-to-end through F1 in the future, F1 needs either (a) a new CLI command that emits an `IssueStateChangeMessage` for an issue, or (b) `CLIIssueTrackerService.updateIssue` extended to translate terminal-state `stateId` changes into a bus message, mirroring `LinearMessageTranslator`.
+- ✅ **End-to-end teardown firing verified.** Initial run was blocked because F1 had no terminal-state transition; that gap is closed in this same change with a new `f1 terminate-issue --issue-id <id> --action completed|canceled|deleted` command (see "Update" section below). Final run confirmed `cyrus-teardown.sh` fires with correct `cwd` and `LINEAR_ISSUE_IDENTIFIER`, and the worktree is removed after.
 
 ## Setup
 
@@ -107,6 +107,49 @@ To make this F1-testable in the future, the smallest viable addition is:
 - In `CLIIssueTrackerService.updateIssue`, when the new `stateId` resolves to a state whose `type === "completed"` or `"canceled"`, also publish an `IssueStateChangeMessage` via the configured event transport, mirroring how `LinearMessageTranslator` handles `issueStatusChanged` webhooks for real Linear.
 
 Until that's in place, teardown coverage stays in the unit-test layer (which is comprehensive).
+
+## Update — gap closed, end-to-end teardown verified
+
+Added the missing terminal-state surface to F1 and re-ran:
+
+- `apps/f1/src/commands/terminateIssue.ts` — new `terminate-issue` CLI command (`--issue-id`, `--action`).
+- `CLIRPCServer` — new `terminateIssue` RPC command.
+- `CLIIssueTrackerService.terminateIssue(issueId, action)` — updates in-memory state and emits an `IssueStateChangeMessage` on the unified message bus.
+- `CLIEventTransport.emitMessage(message)` — peer to `emitEvent` for internal-message emission.
+- `EdgeWorker` (CLI setup) — now also subscribes to `cliEventTransport.on("message", handleMessage)` so terminal-state messages reach `handleIssueStateChangeMessage`.
+
+Re-run on a fresh F1 server with both `cyrus-setup.sh` and `cyrus-teardown.sh` in the test repo:
+
+```bash
+CYRUS_PORT=3601 ./f1 create-issue --title "Add multiply method" ...        # issue-1 / DEF-1
+CYRUS_PORT=3601 ./f1 start-session --issue-id issue-1                       # session-1
+CYRUS_PORT=3601 ./f1 prompt-session --session-id session-1 \
+  --message "F1 Test Repository"                                            # repo selection
+# ... cyrus-setup.sh fires, worktree exists ...
+CYRUS_PORT=3601 ./f1 terminate-issue --issue-id issue-1 --action completed
+```
+
+Results:
+
+```
+$ cat /tmp/cyrus-hooks/teardown-DEF-1.txt
+identifier=DEF-1
+cwd=/private/tmp/cyrus-f1-1779304068065/worktrees/DEF-1
+hook=teardown
+
+$ ls /tmp/cyrus-f1-1779304068065/worktrees/      # worktree removed
+(empty)
+```
+
+Server log:
+
+```
+[EdgeWorker] [MessageBus] Issue reached terminal state: DEF-1
+[GitService] ℹ️  Running repository teardown script: cyrus-teardown.sh
+[GitService] ✅ Repository teardown script completed successfully
+```
+
+End-to-end path validated: `f1 terminate-issue` → `CLIRPCServer.handleTerminateIssue` → `CLIIssueTrackerService.terminateIssue` → `CLIEventTransport.emitMessage(IssueStateChangeMessage)` → `EdgeWorker.handleMessage` → `handleIssueStateChangeMessage` → `gitService.deleteWorktree({ repositories })` → `runRepoTeardownScript` → worktree removal.
 
 ## Cleanup
 
