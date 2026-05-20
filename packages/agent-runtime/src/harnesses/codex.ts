@@ -50,6 +50,18 @@ export const codexHarness: HarnessAdapter = {
 	parseStdoutLine(line, context) {
 		return parseJsonLine("codex", line, context);
 	},
+	buildStateEnv(mountPath) {
+		// Codex (Rust binary) reads `CODEX_HOME` for its config / credentials
+		// / sessions / skills dir (default `~/.codex/`). No XDG fallback —
+		// see `codex-rs/utils/home-dir/src/lib.rs::find_codex_home`. The
+		// binary errors out if the directory doesn't already exist, so the
+		// runtime's persistent-state mount must already be writable when
+		// the harness starts; we assume the volume mount handles that
+		// (subpath dirs are created on first bind for Daytona volumes).
+		// Joining a `.codex` suffix keeps the layout consistent with
+		// claude/cursor and lets multiple harnesses share one binding.
+		return { CODEX_HOME: `${mountPath}/.codex` };
+	},
 	extractResult(events) {
 		const message = [...events].reverse().find((event) => {
 			if (!isRecord(event.raw)) {

@@ -52,6 +52,25 @@ export const RuntimeSandboxConfigSchema = z.object({
 			}),
 		)
 		.optional(),
+	persistentState: z
+		.object({
+			volume: z.object({
+				name: z.string().min(1),
+				source: z.string().optional(),
+				kind: z.enum(["bind", "fuse", "provider"]).optional(),
+				readOnly: z.boolean().optional(),
+			}),
+			// bindingId becomes the volume subpath. Reject anything that
+			// could escape the mount root or land on a sibling binding.
+			bindingId: z
+				.string()
+				.min(1)
+				.refine(
+					(s) => !s.includes("..") && !s.startsWith("/"),
+					"bindingId must not contain '..' or start with '/'",
+				),
+		})
+		.optional(),
 	networkEgress: RuntimeNetworkEgressConfigSchema.optional(),
 	destroyWhileInactive: z.boolean().optional(),
 });

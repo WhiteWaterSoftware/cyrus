@@ -2,7 +2,12 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createAgentSession, normalizeConfig } from "../src/runtime.js";
+import { getHarnessAdapter } from "../src/harnesses/index.js";
+import {
+	applyPersistentState,
+	createAgentSession,
+	normalizeConfig,
+} from "../src/runtime.js";
 import type {
 	CommandExecutionResult,
 	RunnerSandbox,
@@ -39,6 +44,101 @@ describe("AgentRuntime", () => {
 			},
 		});
 		expect(config.sandbox.snapshot).toBe("cyrus-base-v3");
+	});
+
+	it("applyPersistentState attaches the volume and env when set", () => {
+		// Caller-facing surface: pick a backing volume + a stable bindingId.
+		// No knowledge of mount paths, subpath math, or CLAUDE_CONFIG_DIR.
+		const normalized = normalizeConfig({
+			harness: "claude",
+			sandbox: {
+				provider: "daytona",
+				persistentState: {
+					volume: { name: "cyrus-prod-vol", kind: "fuse" },
+					bindingId: "thread-abc",
+				},
+			},
+		});
+		const result = applyPersistentState(normalized, getHarnessAdapter);
+
+		// Volume gets mounted at the runtime-internal path with bindingId
+		// as subpath — the same name+bindingId across sandbox lifetimes
+		// re-exposes the prior state on disk.
+		expect(result.sandbox.volumes).toEqual([
+			{
+				name: "cyrus-prod-vol",
+				mountPath: "/var/cyrus/harness-state",
+				subpath: "thread-abc",
+				source: undefined,
+				kind: "fuse",
+				readOnly: undefined,
+			},
+		]);
+		// Claude adapter contributes CLAUDE_CONFIG_DIR pointing into the
+		// mount — `claude --resume <id>` now finds the prior transcript.
+		expect(result.env.CLAUDE_CONFIG_DIR).toBe(
+			"/var/cyrus/harness-state/.claude",
+		);
+	});
+
+	it("applyPersistentState is a no-op when persistentState is unset", () => {
+		const normalized = normalizeConfig({
+			harness: "claude",
+			env: { EXISTING: "1" },
+		});
+		const result = applyPersistentState(normalized, getHarnessAdapter);
+		expect(result).toBe(normalized);
+	});
+
+	it("applyPersistentState is a no-op when the adapter omits buildStateEnv", () => {
+		// Defensive: if a future harness adapter doesn't implement
+		// `buildStateEnv` (no upstream env var for redirecting state),
+		// declaring persistentState should silently no-op rather than
+		// mount a volume nobody will read from. Inject a stub adapter
+		// to simulate that, since today all five real adapters declare
+		// the method.
+		const normalized = normalizeConfig({
+			harness: "claude",
+			sandbox: {
+				provider: "daytona",
+				persistentState: {
+					volume: { name: "shared-vol" },
+					bindingId: "thread-xyz",
+				},
+			},
+		});
+		const stubAdapter = {
+			...getHarnessAdapter("claude"),
+			buildStateEnv: undefined,
+		};
+		const result = applyPersistentState(normalized, () => stubAdapter);
+		expect(result.sandbox.volumes).toBeUndefined();
+		expect(result.env.CLAUDE_CONFIG_DIR).toBeUndefined();
+	});
+
+	it("applyPersistentState preserves caller env and existing volumes", () => {
+		const normalized = normalizeConfig({
+			harness: "cursor",
+			env: { CALLER_VAR: "keep-me" },
+			sandbox: {
+				provider: "daytona",
+				volumes: [{ name: "logs-vol", mountPath: "/var/log/agent" }],
+				persistentState: {
+					volume: { name: "cyrus-prod-vol" },
+					bindingId: "thread-def",
+				},
+			},
+		});
+		const result = applyPersistentState(normalized, getHarnessAdapter);
+
+		expect(result.env.CALLER_VAR).toBe("keep-me");
+		expect(result.env.CURSOR_DATA_DIR).toBe("/var/cyrus/harness-state/.cursor");
+		expect(result.sandbox.volumes).toHaveLength(2);
+		expect(result.sandbox.volumes?.[0]).toMatchObject({ name: "logs-vol" });
+		expect(result.sandbox.volumes?.[1]).toMatchObject({
+			name: "cyrus-prod-vol",
+			subpath: "thread-def",
+		});
 	});
 
 	it("runs a session through an injected sandbox provider", async () => {

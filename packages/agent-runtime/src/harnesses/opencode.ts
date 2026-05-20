@@ -33,4 +33,27 @@ export const opencodeHarness: HarnessAdapter = {
 	parseStdoutLine(line, context) {
 		return parseJsonLine("opencode", line, context);
 	},
+	buildStateEnv(mountPath) {
+		// opencode doesn't ship a single state-dir override env var. Its
+		// `Global.make()` (see `packages/core/src/global.ts` in
+		// `github.com/sst/opencode`) resolves all four storage roots via
+		// the `xdg-basedir` npm package and appends `/opencode` to each.
+		// To corral every dir under our persistent mount we must override
+		// all four XDG vars. We scope them under `.opencode-xdg/` so we
+		// don't accidentally claim the XDG hierarchy for unrelated tools
+		// that happen to run in the sandbox (git, npm, etc.).
+		//
+		// Resulting on-disk layout under the mount:
+		//   .opencode-xdg/config/opencode/   (config files)
+		//   .opencode-xdg/data/opencode/     (logs, repos)
+		//   .opencode-xdg/state/opencode/    (sessions, flock)
+		//   .opencode-xdg/cache/opencode/    (bin cache)
+		const root = `${mountPath}/.opencode-xdg`;
+		return {
+			XDG_CONFIG_HOME: `${root}/config`,
+			XDG_DATA_HOME: `${root}/data`,
+			XDG_STATE_HOME: `${root}/state`,
+			XDG_CACHE_HOME: `${root}/cache`,
+		};
+	},
 };

@@ -263,6 +263,52 @@ export interface RuntimeNetworkEgressConfig {
 	deniedHosts?: string[];
 }
 
+/**
+ * Declarative way to make a harness's persistent state survive across
+ * sandbox lifecycles. The caller picks a backing storage and a stable
+ * binding identifier; the runtime mounts the backing at a fixed internal
+ * path and asks the harness adapter (via {@link HarnessAdapter.buildStateEnv})
+ * which env vars to set so the harness writes its state there instead
+ * of under `$HOME`.
+ *
+ * Concrete example (Daytona + Claude):
+ * ```ts
+ * sandbox: {
+ *   provider: "daytona",
+ *   persistentState: {
+ *     volume: { name: "cyrus-prod-vol", kind: "fuse" },
+ *     bindingId: threadKey,
+ *   },
+ * }
+ * ```
+ * The runtime mounts the volume, uses `bindingId` as the subpath, and the
+ * Claude adapter contributes `CLAUDE_CONFIG_DIR=<mount>/.claude`. A future
+ * session with the same `bindingId` + same `volume.name` sees the prior
+ * state on disk and `--resume <id>` works across brand-new sandboxes.
+ *
+ * Caller-facing surface is intentionally minimal: no env-var names, no
+ * mount paths, no subpath math.
+ */
+export interface RuntimePersistentState {
+	/**
+	 * Provider-backed storage for the harness's state directory. Required
+	 * today (only the Daytona path is wired). For providers without volume
+	 * support this field will move to a discriminated shape in a future
+	 * release; for now, set the volume name + kind and the runtime fills
+	 * in the rest.
+	 */
+	volume: Omit<RuntimeVolumeConfig, "mountPath" | "subpath">;
+	/**
+	 * Stable identifier for this state binding. Same `bindingId` + same
+	 * `volume.name` = the same on-disk state visible across sessions
+	 * (and across brand-new sandboxes for remote providers). Used by the
+	 * runtime as the volume's `subpath`, so it must be a non-empty
+	 * filesystem-safe string (a thread id, conversation id, etc. all
+	 * work). Path traversal attempts (`..`, leading `/`) are rejected.
+	 */
+	bindingId: string;
+}
+
 export interface RuntimeSandboxConfig {
 	provider: "local" | string;
 	id?: string;
@@ -281,6 +327,13 @@ export interface RuntimeSandboxConfig {
 	timeoutMs?: number;
 	metadata?: Record<string, unknown>;
 	volumes?: RuntimeVolumeConfig[];
+	/**
+	 * Make the harness's persistent state (e.g. `~/.claude/`, `~/.cursor/`)
+	 * survive across sandbox lifecycles by mounting a backing store at a
+	 * runtime-internal path and asking the harness adapter which env vars
+	 * to set so the harness writes there. See {@link RuntimePersistentState}.
+	 */
+	persistentState?: RuntimePersistentState;
 	networkEgress?: RuntimeNetworkEgressConfig;
 	/**
 	 * When `true`, the runtime "pauses" the underlying sandbox while no
@@ -469,6 +522,35 @@ export interface HarnessAdapter {
 	 * for the next reply in the same binding.
 	 */
 	extractSessionId?(events: TranscriptEvent[]): string | undefined;
+	/**
+	 * Given the path where the runtime has mounted persistent storage for
+	 * this session, return env vars that point the harness's state
+	 * directory (e.g. `~/.claude/`, `~/.cursor/`) into that mount.
+	 *
+	 * Called by the runtime when {@link RuntimeSandboxConfig.persistentState}
+	 * is set, so the consumer's session config can stay harness-agnostic.
+	 * Adapters that don't support persistent-state redirection can omit
+	 * this; the runtime then leaves the session env unchanged (and the
+	 * persistent-state binding becomes a no-op for that harness).
+	 *
+	 * Shape of the env var depends on which override the harness exposes
+	 * upstream — verified per harness:
+	 * - Claude: `{ CLAUDE_CONFIG_DIR: `${mountPath}/.claude` }` — points
+	 *   at the dir itself.
+	 * - Cursor: `{ CURSOR_DATA_DIR: `${mountPath}/.cursor` }` — points at
+	 *   the dir itself.
+	 * - Codex: `{ CODEX_HOME: `${mountPath}/.codex` }` — points at the dir
+	 *   itself; codex aborts if the path doesn't exist, so the mount must
+	 *   already be writable.
+	 * - Gemini: `{ GEMINI_CLI_HOME: mountPath }` — overrides the value of
+	 *   `homedir()` inside the CLI; `.gemini` is hardcoded as the suffix,
+	 *   so the harness will write under `${mountPath}/.gemini/`.
+	 * - OpenCode: no single override env var upstream; the runtime sets all
+	 *   four XDG dirs (`XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`,
+	 *   `XDG_CACHE_HOME`) under a scoped subdir so opencode's
+	 *   `xdg-basedir`-derived paths all land under the mount.
+	 */
+	buildStateEnv?(mountPath: string): Record<string, string>;
 }
 
 export interface TranscriptParseContext {

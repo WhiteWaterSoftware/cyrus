@@ -364,6 +364,59 @@ describe("harness adapters", () => {
 		});
 	});
 
+	it("claude.buildStateEnv joins .claude under the mount path", () => {
+		const adapter = getHarnessAdapter("claude");
+		// `applyPersistentState` always passes the runtime-internal mount
+		// point — adapters are expected to namespace under a fixed subdir
+		// so two harnesses can share one binding without colliding.
+		expect(adapter.buildStateEnv?.("/var/cyrus/harness-state")).toEqual({
+			CLAUDE_CONFIG_DIR: "/var/cyrus/harness-state/.claude",
+		});
+	});
+
+	it("cursor.buildStateEnv joins .cursor under the mount path", () => {
+		const adapter = getHarnessAdapter("cursor");
+		expect(adapter.buildStateEnv?.("/var/cyrus/harness-state")).toEqual({
+			CURSOR_DATA_DIR: "/var/cyrus/harness-state/.cursor",
+		});
+	});
+
+	it("codex.buildStateEnv sets CODEX_HOME to mount/.codex", () => {
+		// Verified against `codex-rs/utils/home-dir/src/lib.rs::find_codex_home`
+		// in openai/codex — `CODEX_HOME` is the only env var that
+		// redirects the dir, no XDG fallback.
+		const adapter = getHarnessAdapter("codex");
+		expect(adapter.buildStateEnv?.("/var/cyrus/harness-state")).toEqual({
+			CODEX_HOME: "/var/cyrus/harness-state/.codex",
+		});
+	});
+
+	it("gemini.buildStateEnv sets GEMINI_CLI_HOME to the mount path itself", () => {
+		// Verified against `@google/gemini-cli-core` →
+		// `dist/src/utils/paths.js::homedir`: the env var replaces the
+		// homedir, and `.gemini` is appended by the CLI itself. So we
+		// hand it the mount path, not `mount/.gemini`.
+		const adapter = getHarnessAdapter("gemini");
+		expect(adapter.buildStateEnv?.("/var/cyrus/harness-state")).toEqual({
+			GEMINI_CLI_HOME: "/var/cyrus/harness-state",
+		});
+	});
+
+	it("opencode.buildStateEnv sets all four XDG dirs under .opencode-xdg", () => {
+		// opencode has no single state-dir env var — it derives all four
+		// storage roots from `xdg-basedir` and appends `/opencode` to each
+		// (see `Global.make()` in sst/opencode). We scope under
+		// `.opencode-xdg/` so we don't claim the XDG hierarchy for
+		// unrelated tools that happen to run in the sandbox.
+		const adapter = getHarnessAdapter("opencode");
+		expect(adapter.buildStateEnv?.("/var/cyrus/harness-state")).toEqual({
+			XDG_CONFIG_HOME: "/var/cyrus/harness-state/.opencode-xdg/config",
+			XDG_DATA_HOME: "/var/cyrus/harness-state/.opencode-xdg/data",
+			XDG_STATE_HOME: "/var/cyrus/harness-state/.opencode-xdg/state",
+			XDG_CACHE_HOME: "/var/cyrus/harness-state/.opencode-xdg/cache",
+		});
+	});
+
 	it("parses non-JSON stdout as text events and ignores blank lines", () => {
 		const adapter = getHarnessAdapter("claude");
 

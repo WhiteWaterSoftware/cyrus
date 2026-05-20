@@ -126,6 +126,14 @@ export const cursorHarness: HarnessAdapter = {
 		}
 		return undefined;
 	},
+	buildStateEnv(mountPath) {
+		// `@cursor/sdk`'s local mode persists agents to a sqlite db under
+		// `$CURSOR_DATA_DIR` (default `~/.cursor/`). Joining `.cursor` under
+		// the runtime's shared state mount keeps the layout identical to
+		// a local install while leaving room for other harnesses to share
+		// the same persistent-state binding.
+		return { CURSOR_DATA_DIR: `${mountPath}/.cursor` };
+	},
 	extractSessionId(events) {
 		// `@cursor/sdk` puts `agent_id` on every SDKMessage variant
 		// (status, tool_call, assistant, user, thinking, request, task,

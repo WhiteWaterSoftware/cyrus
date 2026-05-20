@@ -104,6 +104,14 @@ export const claudeHarness: HarnessAdapter = {
 			? result.raw.result
 			: undefined;
 	},
+	buildStateEnv(mountPath) {
+		// Claude Code reads/writes its session transcripts, OAuth creds, and
+		// config from `$CLAUDE_CONFIG_DIR` when set (otherwise `~/.claude/`).
+		// Joining a `.claude` suffix under the runtime's shared state mount
+		// keeps the layout identical to a local install and leaves the
+		// sibling mount safe for other harnesses' state dirs.
+		return { CLAUDE_CONFIG_DIR: `${mountPath}/.claude` };
+	},
 	extractSessionId(events) {
 		// Claude Code's stream-json emits a `system` event with
 		// `subtype: "init"` and a `session_id` at the start of every run.

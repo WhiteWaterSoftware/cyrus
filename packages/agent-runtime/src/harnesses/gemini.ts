@@ -34,4 +34,14 @@ export const geminiHarness: HarnessAdapter = {
 	parseStdoutLine(line, context) {
 		return parseJsonLine("gemini", line, context);
 	},
+	buildStateEnv(mountPath) {
+		// Gemini CLI doesn't have a dir-specific override env var; it
+		// overrides what its `homedir()` helper returns via
+		// `GEMINI_CLI_HOME` (see `@google/gemini-cli-core` →
+		// `dist/src/utils/paths.js::homedir`). The dir suffix is hardcoded
+		// to `.gemini`, so the CLI ends up reading/writing
+		// `${mountPath}/.gemini/` — which sits as a sibling to other
+		// harnesses' `.<name>/` dirs under the same mount.
+		return { GEMINI_CLI_HOME: mountPath };
+	},
 };
