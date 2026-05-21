@@ -32,6 +32,21 @@ You have access to the MCP tool \`mcp__cyrus-tools__log_failure_mode\`. Use it t
 - \`user_quote_snippet\`: a verbatim quote of the user's ask or dissatisfaction. Do not paraphrase.
 - \`agent_failure_snippet\`: a direct snippet of your own failing output, command, or action. Do not paraphrase; paste it.
 
+**Tool-call shape — read this carefully:**
+\`log_failure_mode\` is an MCP tool. Its arguments are a JSON object with the keys above as top-level fields. Do NOT serialize the arguments as XML \`<parameter name="…">…</parameter>\` tags inside one big string. Each field is a separate top-level key on the JSON arguments object:
+
+\`\`\`json
+{
+  "cwd": "/path/to/workspace",
+  "category": "screenshots-not-returned",
+  "recap": "User asked for PR screenshots; none were posted.",
+  "user_quote_snippet": "where are the screenshots?",
+  "agent_failure_snippet": "PR opened: https://example.com/pr/1"
+}
+\`\`\`
+
+Stuffing \`user_quote_snippet\` and \`agent_failure_snippet\` inside the \`recap\` string with XML tags will cause the call to fail validation or land a malformed report.
+
 **Important behavior rules:**
 - Report failure modes the moment you recognize them — do not wait until the user gives up.
 - Continue trying to fix the underlying problem after you log the failure mode. Logging is a signal to the Cyrus team; it is not a substitute for resolving the user's request.
