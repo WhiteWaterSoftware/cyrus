@@ -81,10 +81,13 @@ export const LINEAR_DEFAULT_ALLOWED_TOOLS = [
 	"TeamCreate",
 	"TeamDelete",
 
-	// Workspace MCP servers — explicit, no implicit appending.
+	// Workspace MCP servers — explicit, no implicit appending. Linear
+	// sessions include `mcp__slack` so Cyrus can post status updates and
+	// follow-up messages to Slack while working on an issue.
 	"mcp__linear",
 	"mcp__cyrus-tools",
 	"mcp__cyrus-docs",
+	"mcp__slack",
 ] as const;
 
 /**
