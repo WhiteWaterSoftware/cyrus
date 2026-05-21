@@ -137,7 +137,7 @@ describe("EdgeWorker - Dynamic Tools Configuration", () => {
 		mockConfig = {
 			proxyUrl: "http://localhost:3000",
 			cyrusHome: TEST_CYRUS_HOME,
-			defaultAllowedTools: ["Read", "Write", "Edit"],
+			linearAllowedTools: ["Read", "Write", "Edit"],
 			repositories: [
 				{
 					id: "test-repo",
@@ -325,14 +325,14 @@ describe("EdgeWorker - Dynamic Tools Configuration", () => {
 			const buildAllowedTools = getBuildAllowedTools(edgeWorker);
 			const tools = buildAllowedTools(repository);
 
-			// Uses the explicit defaultAllowedTools from mockConfig verbatim.
+			// Uses the explicit linearAllowedTools from mockConfig verbatim.
 			expect(tools).toEqual(["Read", "Write", "Edit"]);
 		});
 
 		it("should fall back to the Linear platform default when no configuration is provided", () => {
 			const configWithoutDefaults: EdgeWorkerConfig = {
 				...mockConfig,
-				defaultAllowedTools: undefined,
+				linearAllowedTools: undefined,
 			};
 
 			const edgeWorkerNoDefaults = new EdgeWorker(configWithoutDefaults);

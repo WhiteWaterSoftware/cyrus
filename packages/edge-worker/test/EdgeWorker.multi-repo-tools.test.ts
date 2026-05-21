@@ -161,7 +161,7 @@ describe("EdgeWorker - Multi-Repo Tool Authorization", () => {
 		mockConfig = {
 			proxyUrl: "http://localhost:3000",
 			cyrusHome: TEST_CYRUS_HOME,
-			defaultAllowedTools: ["Read", "Write", "Edit"],
+			linearAllowedTools: ["Read", "Write", "Edit"],
 			repositories: [
 				{
 					id: "repo-a",
@@ -345,14 +345,14 @@ describe("EdgeWorker - Multi-Repo Tool Authorization", () => {
 			const buildAllowedTools = getBuildAllowedTools(edgeWorker);
 			const tools = buildAllowedTools([]);
 
-			// Falls back to global defaultAllowedTools verbatim.
+			// Falls back to global linearAllowedTools verbatim.
 			expect(tools).toEqual(["Read", "Write", "Edit"]);
 		});
 
 		it("should fall back to LINEAR_DEFAULT_ALLOWED_TOOLS for empty array when no global defaults", () => {
 			const configNoDefaults: EdgeWorkerConfig = {
 				...mockConfig,
-				defaultAllowedTools: undefined,
+				linearAllowedTools: undefined,
 			};
 			const ew = new EdgeWorker(configNoDefaults);
 			const buildAllowedTools = getBuildAllowedTools(ew);

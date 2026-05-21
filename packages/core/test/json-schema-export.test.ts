@@ -47,6 +47,7 @@ describe("JSON Schema export", () => {
 				"defaultModel",
 				"defaultFallbackModel",
 				"global_setup_script",
+				"linearAllowedTools",
 				"defaultAllowedTools",
 				"defaultDisallowedTools",
 				"slackAllowedTools",

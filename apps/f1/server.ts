@@ -165,7 +165,7 @@ function createEdgeWorkerConfig(): EdgeWorkerConfig {
 		claudeDefaultModel: "sonnet",
 		claudeDefaultFallbackModel: "haiku",
 		// Enable all tools including Edit(**), Bash, etc. for full testing capability
-		defaultAllowedTools: getAllTools(),
+		linearAllowedTools: getAllTools(),
 		// CLI platform needs a linearWorkspaces entry so the CLIIssueTrackerService
 		// gets created for the workspace ID referenced in the repository configs
 		linearWorkspaces: {

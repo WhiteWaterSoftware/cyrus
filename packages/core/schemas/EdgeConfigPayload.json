@@ -546,6 +546,12 @@
 		"global_setup_script": {
 			"type": "string"
 		},
+		"linearAllowedTools": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			}
+		},
 		"defaultAllowedTools": {
 			"type": "array",
 			"items": {

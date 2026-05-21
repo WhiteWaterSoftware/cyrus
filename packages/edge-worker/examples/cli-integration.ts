@@ -34,7 +34,7 @@ export async function createCLIEdgeWorker(config: any) {
 
 		// Claude configuration
 		claudePath: config.claude.path,
-		defaultAllowedTools: config.claude.allowedTools,
+		linearAllowedTools: config.claude.allowedTools,
 
 		// Workspace configuration
 		workspaceBaseDir: config.workspace.baseDir,

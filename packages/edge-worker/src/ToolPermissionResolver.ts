@@ -27,7 +27,7 @@ export type PromptType =
  * (`LINEAR_DEFAULT_ALLOWED_TOOLS`, `SLACK_DEFAULT_ALLOWED_TOOLS`,
  * `GITHUB_DEFAULT_ALLOWED_TOOLS`) and include workspace MCP prefixes
  * (`mcp__linear`, `mcp__cyrus-tools`, etc.) explicitly. Callers that want a
- * tighter list pass `defaultAllowedTools` / `slackAllowedTools` /
+ * tighter list pass `linearAllowedTools` / `slackAllowedTools` /
  * `githubAllowedTools` on `EdgeWorkerConfig`, or set repo-level
  * `allowedTools`. The repo override is a verbatim replacement, not an
  * intersection.
@@ -116,7 +116,7 @@ export class ToolPermissionResolver {
 	 * Accepts a single repository or an array for multi-repo sessions. For
 	 * multiple repositories the result is the **union** of each repo's
 	 * resolved list (per-repo presets resolved first, then unioned). When no
-	 * repos are passed, falls back to the workspace `defaultAllowedTools`
+	 * repos are passed, falls back to the workspace `linearAllowedTools`
 	 * (or the Linear platform default when neither is set).
 	 */
 	public buildAllowedTools(
@@ -128,7 +128,7 @@ export class ToolPermissionResolver {
 			: [repositories];
 
 		if (repoArray.length === 0) {
-			const baseTools = this.config.defaultAllowedTools ?? [
+			const baseTools = this.config.linearAllowedTools ?? [
 				...LINEAR_DEFAULT_ALLOWED_TOOLS,
 			];
 			return [...new Set(baseTools)];
@@ -152,7 +152,7 @@ export class ToolPermissionResolver {
 	 * GitHub `@mentions` target a single repository via a single PR, so this
 	 * does not perform multi-repo union — it expects exactly one repo. When
 	 * the workspace defines `githubAllowedTools` it is used as the global
-	 * default for resolution (in place of `defaultAllowedTools`); otherwise
+	 * default for resolution (in place of `linearAllowedTools`); otherwise
 	 * we fall back to `GITHUB_DEFAULT_ALLOWED_TOOLS`. Per-repository
 	 * `allowedTools` overrides still take precedence — same priority chain
 	 * as Linear, just with a different platform default at the bottom.
@@ -167,12 +167,12 @@ export class ToolPermissionResolver {
 				? this.config.githubAllowedTools
 				: [...GITHUB_DEFAULT_ALLOWED_TOOLS];
 
-		const originalDefault = this.config.defaultAllowedTools;
-		this.config.defaultAllowedTools = platformDefault;
+		const originalDefault = this.config.linearAllowedTools;
+		this.config.linearAllowedTools = platformDefault;
 		try {
 			return this.buildAllowedTools(repository, promptType);
 		} finally {
-			this.config.defaultAllowedTools = originalDefault;
+			this.config.linearAllowedTools = originalDefault;
 		}
 	}
 
@@ -217,8 +217,8 @@ export class ToolPermissionResolver {
 		// 4. Workspace default allowed tools (the platform default the
 		//    surrounding `buildAllowedTools` / `buildGithubAllowedTools`
 		//    swapped in, if any).
-		if (this.config.defaultAllowedTools) {
-			return this.config.defaultAllowedTools;
+		if (this.config.linearAllowedTools) {
+			return this.config.linearAllowedTools;
 		}
 		// 5. Final fallback — Linear platform default.
 		return [...LINEAR_DEFAULT_ALLOWED_TOOLS];

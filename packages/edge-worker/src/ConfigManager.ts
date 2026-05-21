@@ -231,8 +231,8 @@ export class ConfigManager extends EventEmitter {
 				defaultModel: parsedConfig.defaultModel || this.config.defaultModel,
 				defaultFallbackModel:
 					parsedConfig.defaultFallbackModel || this.config.defaultFallbackModel,
-				defaultAllowedTools:
-					parsedConfig.defaultAllowedTools || this.config.defaultAllowedTools,
+				linearAllowedTools:
+					parsedConfig.linearAllowedTools || this.config.linearAllowedTools,
 				defaultDisallowedTools:
 					parsedConfig.defaultDisallowedTools ||
 					this.config.defaultDisallowedTools,
@@ -328,7 +328,7 @@ export class ConfigManager extends EventEmitter {
 			"cursorDefaultFallbackModel",
 			"defaultModel",
 			"defaultFallbackModel",
-			"defaultAllowedTools",
+			"linearAllowedTools",
 			"defaultDisallowedTools",
 			"promptDefaults",
 			"issueUpdateTrigger",

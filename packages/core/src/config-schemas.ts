@@ -381,7 +381,18 @@ export const EdgeConfigSchema = z.object({
 	/** Optional path to global setup script that runs for all repositories */
 	global_setup_script: z.string().optional(),
 
-	/** Default tools to allow across all repositories */
+	/**
+	 * Allowed tools for Linear-triggered agent sessions. Renamed from the
+	 * old `defaultAllowedTools` to make the platform scope explicit alongside
+	 * `slackAllowedTools` and `githubAllowedTools`.
+	 */
+	linearAllowedTools: z.array(z.string()).optional(),
+
+	/**
+	 * @deprecated Use linearAllowedTools instead. Legacy field retained for
+	 * older self-host CLI consumers that still write the old name; migrated
+	 * forward on load via `migrateEdgeConfig`.
+	 */
 	defaultAllowedTools: z.array(z.string()).optional(),
 
 	/** Tools to explicitly disallow across all repositories */
@@ -397,7 +408,7 @@ export const EdgeConfigSchema = z.object({
 
 	/**
 	 * Allowed tools for GitHub-triggered agent sessions. When set, overrides
-	 * `defaultAllowedTools` specifically for sessions originating from GitHub
+	 * `linearAllowedTools` specifically for sessions originating from GitHub
 	 * (PR comments, automated fix-on-failure flows, etc.).
 	 */
 	githubAllowedTools: z.array(z.string()).optional(),
@@ -454,9 +465,20 @@ export const EdgeConfigPayloadSchema = EdgeConfigSchema.extend({
  * returns the config unchanged.
  */
 export function migrateEdgeConfig(
-	raw: Record<string, unknown>,
+	input: Record<string, unknown>,
 ): Record<string, unknown> {
-	// Already migrated or no repositories — nothing to do
+	// `defaultAllowedTools` → `linearAllowedTools`. Older self-host CLIs and
+	// any config file written before the rename still ship the old key; fold
+	// it forward in-place. We do NOT delete the old key — newer consumers
+	// ignore it, and an older runtime that still reads the old key keeps
+	// working until it's upgraded.
+	const raw: Record<string, unknown> =
+		Array.isArray(input.defaultAllowedTools) &&
+		input.linearAllowedTools === undefined
+			? { ...input, linearAllowedTools: input.defaultAllowedTools }
+			: input;
+
+	// Already migrated or no repositories — nothing else to do
 	if (raw.linearWorkspaces || !Array.isArray(raw.repositories)) {
 		return raw;
 	}
