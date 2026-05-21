@@ -414,33 +414,40 @@ export const EdgeConfigSchema = z.object({
 	githubAllowedTools: z.array(z.string()).optional(),
 
 	/**
-	 * Filesystem paths to MCP config JSON files (Claude Code `.mcp.json`
-	 * format) the runtime should load for Slack `@mention` chat sessions.
-	 * When set and non-empty, this list is authoritative — only these
-	 * servers are spun up for Slack sessions. When omitted or empty, the
-	 * runtime falls back to the legacy behavior (per-repo `mcpConfigPath`
-	 * picked from the first configured repository — see
-	 * `ChatRepositoryProvider.getDefaultRepository()`).
+	 * Filesystem paths to custom-integration MCP config JSON files (Claude
+	 * Code `.mcp.json` format) the runtime should load for Slack `@mention`
+	 * chat sessions. Chat sessions are repo-agnostic, so
+	 * `repository.mcpConfigPath` is not consulted here — only this list
+	 * determines which custom `.mcp.json` files load for Slack. When
+	 * omitted/empty, no custom files load (native MCP servers — Linear,
+	 * Cyrus tools, Slack MCP, Cyrus docs — still run as usual).
 	 *
-	 * The per-platform lists let cyrus-hosted route MCP server availability
-	 * per surface — e.g. expose `slack-mcp-server` only on Slack, or scope
-	 * a Supabase MCP to GitHub PR sessions but not Linear issue work. Each
-	 * entry is passed as-is to Claude Code's `--mcp-config` mechanism.
+	 * The per-platform lists let cyrus-hosted route custom MCP server
+	 * availability per surface — e.g. expose `slack-mcp-server` only on
+	 * Slack, or scope a Supabase MCP to GitHub PR sessions but not Linear
+	 * issue work. Each entry is passed as-is to Claude Code's
+	 * `--mcp-config` mechanism.
 	 */
 	slackMcpConfigs: z.array(z.string()).optional(),
 
 	/**
-	 * Filesystem paths to MCP config JSON files for Linear-triggered agent
-	 * sessions. Same semantics as `slackMcpConfigs`. Falls back to the
-	 * unioned `repository.mcpConfigPath` of every routed repo when omitted.
+	 * Filesystem paths to custom-integration MCP config JSON files for
+	 * Linear-triggered agent sessions. NOT a blanket override — this list
+	 * is only consulted when the routed repo does NOT have its own
+	 * `allowedTools` override. If the repo has its own allow-list set, the
+	 * agent uses `repository.mcpConfigPath` instead so the repo's
+	 * permission rules and its server set always come from the same scope.
+	 * When omitted/empty AND the repo has no override, no custom `.mcp.json`
+	 * files load.
 	 */
 	linearMcpConfigs: z.array(z.string()).optional(),
 
 	/**
-	 * Filesystem paths to MCP config JSON files for GitHub-triggered agent
-	 * sessions. Same semantics as `slackMcpConfigs`. Falls back to the
-	 * single target repo's `mcpConfigPath` when omitted (GitHub `@mentions`
-	 * are always single-repo).
+	 * Filesystem paths to custom-integration MCP config JSON files for
+	 * GitHub/GitLab-triggered agent sessions. Same repo-override-coupling
+	 * semantics as `linearMcpConfigs`: only consulted when the routed repo
+	 * does not have its own `allowedTools` override; otherwise the repo's
+	 * `mcpConfigPath` is used.
 	 */
 	githubMcpConfigs: z.array(z.string()).optional(),
 

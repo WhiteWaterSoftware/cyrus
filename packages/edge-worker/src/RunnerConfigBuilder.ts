@@ -73,16 +73,20 @@ export interface ChatRunnerConfigInput {
 	platformName: string;
 	/** Linear workspace ID for building fresh MCP config at session start */
 	linearWorkspaceId?: string;
-	/** Repository to source user-configured MCP paths from (V1: first available repo) */
+	/** Repository whose MCP runtime servers (Linear MCP, Cyrus tools, etc.) get
+	 * spun up for this chat session — chat sessions are repo-agnostic at the
+	 * session level, so this just picks one repo to seed those native servers. */
 	repository?: RepositoryConfig;
 	/** Repository paths the chat session can read */
 	repositoryPaths?: string[];
 	/**
-	 * Per-platform MCP config path overrides (`EdgeWorkerConfig.slackMcpConfigs`
-	 * for Slack chat sessions). When non-empty, this list is authoritative —
-	 * the runtime ignores `repository.mcpConfigPath` and loads exactly these
-	 * `.mcp.json` files instead. When omitted/empty, falls back to the
-	 * legacy repo-derived behavior.
+	 * Filesystem paths to custom-integration `.mcp.json` files to load for
+	 * this chat session (sourced from `EdgeWorkerConfig.slackMcpConfigs` for
+	 * Slack). Chat sessions are repo-agnostic, so `repository.mcpConfigPath`
+	 * is not consulted here — only this list determines which custom MCP
+	 * files the session loads. When empty/omitted, no custom `.mcp.json`
+	 * files are loaded (native servers built via `mcpConfigProvider` still
+	 * run as usual).
 	 */
 	platformMcpConfigOverrides?: readonly string[];
 	logger: ILogger;
@@ -106,10 +110,14 @@ export interface IssueRunnerConfigInput {
 	issueDescription?: string;
 	maxTurns?: number;
 	/**
-	 * Per-platform MCP config path overrides. For Linear issue sessions
-	 * callers thread `EdgeWorkerConfig.linearMcpConfigs`; for GitHub PR
-	 * sessions, `githubMcpConfigs`. When non-empty, those files become
-	 * authoritative and the repo-derived list is skipped.
+	 * Filesystem paths to custom-integration `.mcp.json` files for this
+	 * issue session: `EdgeWorkerConfig.linearMcpConfigs` for Linear, or
+	 * `githubMcpConfigs` for GitHub/GitLab. The list is NOT a blanket
+	 * override — it's only consulted when the routed repo does NOT have its
+	 * own `allowedTools` override. If the repo has its own allow-list set,
+	 * the agent uses `repository.mcpConfigPath` instead so the repo's
+	 * permission rules and its server set always come from the same scope
+	 * (see `buildIssueConfig`).
 	 */
 	platformMcpConfigOverrides?: readonly string[];
 	linearWorkspaceId?: string;

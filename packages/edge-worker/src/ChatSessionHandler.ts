@@ -62,10 +62,12 @@ export interface ChatSessionHandlerDeps {
 	/** Factory function that creates the appropriate runner based on config.defaultRunner */
 	createRunner: (config: AgentRunnerConfig) => IAgentRunner;
 	/**
-	 * Live read of the workspace-level MCP config overrides for the chat
-	 * platform this handler is bound to (e.g. `config.slackMcpConfigs` for
-	 * Slack). When non-empty, these `.mcp.json` paths are authoritative —
-	 * `repository.mcpConfigPath` is ignored.
+	 * Live read of the workspace-level custom-integration MCP config paths
+	 * for the chat platform this handler is bound to (e.g.
+	 * `config.slackMcpConfigs` for Slack). Chat sessions are repo-agnostic,
+	 * so `repository.mcpConfigPath` is not consulted; only this list
+	 * determines which custom `.mcp.json` files load. When empty/omitted,
+	 * no custom files load (native MCP servers still run as usual).
 	 */
 	getPlatformMcpConfigOverrides?: () => readonly string[] | undefined;
 	onWebhookStart: () => void;

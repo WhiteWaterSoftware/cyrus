@@ -6142,10 +6142,13 @@ ${input.userComment}
 			labels,
 			issueDescription,
 			maxTurns,
-			// Per-platform MCP config overrides — GitHub + GitLab share the
+			// Per-platform MCP config paths — GitHub + GitLab share the
 			// `githubMcpConfigs` knob (single-repo PR contexts both); Linear
-			// gets `linearMcpConfigs`. When the override list is empty the
-			// builder falls back to the repo's `mcpConfigPath` as before.
+			// gets `linearMcpConfigs`. Not a blanket override: the builder
+			// uses `repository.mcpConfigPath` when this repo has its own
+			// `allowedTools` override (so the repo's permission rules and
+			// MCP server set travel as a unit), and only falls through to
+			// this list when the repo inherits the platform allow-list.
 			platformMcpConfigOverrides:
 				sessionPlatform === "linear"
 					? this.config.linearMcpConfigs
