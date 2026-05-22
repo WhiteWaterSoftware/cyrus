@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **`slackAllowedTools`, `githubAllowedTools`, `linearAllowedTools`, and the `*McpConfigs` arrays from `~/.cyrus/config.json` are now applied at cold start.** Previously these fields were only picked up after a post-start config-file change, so the very first session after restart silently fell back to the built-in defaults. ([CYPACK-1236](https://linear.app/ceedar/issue/CYPACK-1236), [#1245](https://github.com/cyrusagents/cyrus/pull/1245))
+
+### Changed
+- **The `ALLOWED_TOOLS` environment variable has been renamed to `LINEAR_ALLOWED_TOOLS`** to match the per-channel naming used elsewhere (`slackAllowedTools`, `githubAllowedTools`). If you were setting `ALLOWED_TOOLS` to override Linear's tool allowlist, rename it to `LINEAR_ALLOWED_TOOLS`. ([CYPACK-1236](https://linear.app/ceedar/issue/CYPACK-1236), [#1245](https://github.com/cyrusagents/cyrus/pull/1245))
+
 ### Removed
 - **Claude-in-Chrome browser integration is no longer enabled for agent sessions.** Cyrus previously passed `--chrome` to every Claude runner session, which registered the `mcp__claude-in-chrome__*` MCP tools. In cloud-runtime sessions there is no path from the worker to the user's local Chrome extension, so those tools always failed with "Browser extension is not connected" — leading agents to loop on a misdiagnosis instead of falling back. The flag and the associated screenshot/GIF upload-guidance hooks have been removed. ([PRO-9](https://linear.app/ceedar/issue/PRO-9/failed-chrome-extension-not-connecting-oswaldo-okeefe), [#1244](https://github.com/cyrusagents/cyrus/pull/1244))
 

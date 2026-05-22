@@ -50,3 +50,5 @@ The interactive wizard will prompt you for:
   - Use this when running in Docker containers or when you need external access to the webhook server
   - When `true`: Server listens on `0.0.0.0` (all interfaces)
   - When `false` or unset: Server listens on `localhost` (local access only)
+- `LINEAR_ALLOWED_TOOLS` - Comma-separated list of tools allowed for Linear-triggered sessions. Overrides `linearAllowedTools` in `~/.cyrus/config.json` when set.
+- `DISALLOWED_TOOLS` - Comma-separated list of tools disallowed across all sessions. Overrides `defaultDisallowedTools` in `~/.cyrus/config.json` when set.
