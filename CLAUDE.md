@@ -448,6 +448,14 @@ The agent automatically moves issues to the "started" state when assigned. Linea
 
    Symptom of forgetting this: the new tool is callable at runtime (the runtime knows about it via the live MCP server) but it never appears in the `/settings/tools` MCP Servers section — so operators can't see it, can't toggle it on/off per platform, and per-repo overrides treat it as unknown.
 
+11. **Adding a new path-bearing field to `EdgeWorkerConfig`**: cyrus-hosted emits self-host paths with literal `~/` prefixes (e.g. `~/.cyrus/mcp-configs/mcp-supabase.json`) because the user's home directory is not known server-side. Node's `fs.readFileSync` does **not** expand `~`, so any path string that flows from `config.json` to `readFileSync` (or to a child SDK that does the same) must be run through `resolvePath` from `cyrus-core` first.
+
+   Per-repository paths (`repositoryPath`, `workspaceBaseDir`, `mcpConfigPath`, `promptTemplatePath`) are already normalized at three sites in `EdgeWorker.ts`: the constructor, `addNewRepositories`, and `updateModifiedRepositories`. Each builds a `resolvedRepo` via `resolvePath(...)` before inserting into `this.repositories`, so downstream consumers (e.g. `RunnerConfigBuilder`, `McpConfigService.buildMergedMcpConfigPath`) get already-absolute paths.
+
+   **Top-level (non-repo-scoped) path fields are a separate, easy-to-miss codepath.** They live directly on `EdgeWorkerConfig` and are read straight off `this.config.<field>` — they do not go through the repo-resolution loop. When you add one, you must also normalize it. The canonical site for this is `EdgeWorker.normalizeConfigPaths()` (called once in the constructor and once on `configChanged`); add your field there alongside `slackMcpConfigs` / `linearMcpConfigs` / `githubMcpConfigs`.
+
+   Symptom of forgetting this: self-host sessions crash with `ENOENT: no such file or directory, open '~/.cyrus/...'` while cloud sessions (which get absolute paths from cyrus-hosted) work fine. This bit us with the three platform MCP config arrays added in CYHOST-967 / v0.2.53 — they were the only path-bearing fields on `EdgeWorkerConfig` that bypassed normalization, and crashed every self-host session that had a connected platform MCP integration.
+
 ## Dependency Security Policy (MANDATE)
 
 Our team's mandated approach for addressing Dependabot advisories and other
