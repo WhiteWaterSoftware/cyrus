@@ -436,6 +436,14 @@ The agent automatically moves issues to the "started" state when assigned. Linea
    - `packages/edge-worker/src/SlackChatAdapter.ts` — Builds the Slack chat system prompt including orchestration notes with repo routing syntax
    - `packages/edge-worker/src/ActivityPoster.ts` — Posts routing activities to Linear timeline (method display names, formatting)
 
+9. **Adding a new top-level `EdgeWorkerConfig` field**: Adding a property to the `EdgeWorkerConfig` Zod schema in `packages/core/src/config-schemas.ts` is **not enough** to make it available at runtime. `ConfigManager.loadConfigSafely()` in `packages/edge-worker/src/ConfigManager.ts` reads `config.json`, then explicitly merges a **hardcoded whitelist** of fields onto its in-memory config — every field not on that list is silently dropped on each reload. Likewise, `detectGlobalConfigChanges()` only fires a `configChanged` event when one of a hardcoded list of keys differs from the previous reload.
+
+   When you add a new top-level field you **must update both lists**:
+   - The merge in `loadConfigSafely()` (around line ~200) — add `<newField>: parsedConfig.<newField> || this.config.<newField>`.
+   - The `globalKeys` array in `detectGlobalConfigChanges()` — add the field name so changes to it trigger downstream `setConfig` calls on dependent services (e.g., `ToolPermissionResolver`).
+
+   Symptom of forgetting this: the field appears in `~/.cyrus/config.json`, the cyrus process is restarted, but downstream code keeps seeing the default (or never picks up hot-reloads). This bit us with `slackAllowedTools` / `githubAllowedTools` / `slackMcpConfigs` / `linearMcpConfigs` / `githubMcpConfigs` during CYHOST-967.
+
 ## Dependency Security Policy (MANDATE)
 
 Our team's mandated approach for addressing Dependabot advisories and other
