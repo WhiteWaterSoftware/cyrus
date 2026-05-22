@@ -386,8 +386,6 @@ export class RunnerConfigBuilder {
 			...(runnerType === "claude" &&
 				input.sandboxSettings &&
 				this.buildSandboxConfig(input)),
-			// Enable Chrome integration for Claude runner (disabled for other runners)
-			...(runnerType === "claude" && { extraArgs: { chrome: null } }),
 			// AskUserQuestion callback - only for Claude runner
 			...(runnerType === "claude" &&
 				input.createAskUserQuestionCallback && {
@@ -526,49 +524,6 @@ export class RunnerConfigBuilder {
 								continue: true,
 								additionalContext: `Screenshot taken successfully. To share this screenshot in Linear comments, use the linear_upload_file tool to upload ${filePath}. This will return an asset URL that can be embedded in markdown. You can also use the Read tool to view the screenshot file to analyze the visual content.`,
 							};
-						},
-					],
-				},
-				{
-					matcher: "mcp__claude-in-chrome__computer",
-					hooks: [
-						async (input, _toolUseID, { signal: _signal }) => {
-							const postToolUseInput = input as PostToolUseHookInput;
-							const response = postToolUseInput.tool_response as {
-								action?: string;
-								imageId?: string;
-								path?: string;
-							};
-							// Only provide upload guidance for screenshot actions
-							if (response?.action === "screenshot") {
-								const filePath = response?.path || "the screenshot file";
-								return {
-									continue: true,
-									additionalContext: `Screenshot captured. To share this screenshot in Linear comments, use the linear_upload_file tool to upload ${filePath}. This will return an asset URL that can be embedded in markdown.`,
-								};
-							}
-							return { continue: true };
-						},
-					],
-				},
-				{
-					matcher: "mcp__claude-in-chrome__gif_creator",
-					hooks: [
-						async (input, _toolUseID, { signal: _signal }) => {
-							const postToolUseInput = input as PostToolUseHookInput;
-							const response = postToolUseInput.tool_response as {
-								action?: string;
-								path?: string;
-							};
-							// Only provide upload guidance for export actions
-							if (response?.action === "export") {
-								const filePath = response?.path || "the exported GIF";
-								return {
-									continue: true,
-									additionalContext: `GIF exported successfully. To share this GIF in Linear comments, use the linear_upload_file tool to upload ${filePath}. This will return an asset URL that can be embedded in markdown.`,
-								};
-							}
-							return { continue: true };
 						},
 					],
 				},

@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+- **Claude-in-Chrome browser integration is no longer enabled for agent sessions.** Cyrus previously passed `--chrome` to every Claude runner session, which registered the `mcp__claude-in-chrome__*` MCP tools. In cloud-runtime sessions there is no path from the worker to the user's local Chrome extension, so those tools always failed with "Browser extension is not connected" — leading agents to loop on a misdiagnosis instead of falling back. The flag and the associated screenshot/GIF upload-guidance hooks have been removed. ([PRO-9](https://linear.app/ceedar/issue/PRO-9/failed-chrome-extension-not-connecting-oswaldo-okeefe))
+
 ## [0.2.54] - 2026-05-22
 
 ### Fixed

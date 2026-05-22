@@ -65,7 +65,7 @@ export interface ClaudeRunnerConfig {
 	/** Additional environment variables to pass to the Claude child process (merged after process.env) */
 	additionalEnv?: Record<string, string>;
 	pathToClaudeCodeExecutable?: string; // Explicit path to Claude Code CLI executable (auto-resolved if not set)
-	extraArgs?: Record<string, string | null>; // Additional CLI arguments to pass to Claude Code (e.g., { chrome: null } for --chrome flag)
+	extraArgs?: Record<string, string | null>; // Additional CLI arguments to pass to Claude Code (e.g., { 'output-format': 'json' } for --output-format=json, or { verbose: null } for boolean flags)
 	/**
 	 * Callback for handling AskUserQuestion tool invocations.
 	 * When provided, the ClaudeRunner will intercept AskUserQuestion tool calls
