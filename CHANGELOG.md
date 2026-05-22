@@ -4,8 +4,57 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.55] - 2026-05-22
+
 ### Fixed
 - **`~/`-prefixed paths in `slackMcpConfigs`, `linearMcpConfigs`, and `githubMcpConfigs` are now expanded.** When cyrus-hosted writes platform MCP config paths for a self-host runtime, it emits `~/.cyrus/mcp-configs/...` strings that were passed verbatim to `fs.readFileSync`, which does not expand tildes — Claude sessions would crash with `ENOENT: ~/.cyrus/mcp-configs/mcp-supabase.json`. EdgeWorker now runs the three platform MCP config arrays through `resolvePath` at construction and on config hot-reload, mirroring how repository-scoped paths have always been normalized. ([#1242](https://github.com/cyrusagents/cyrus/pull/1242))
+
+### Packages
+
+#### cyrus-cloudflare-tunnel-client
+- cyrus-cloudflare-tunnel-client@0.2.55
+
+#### cyrus-mcp-tools
+- cyrus-mcp-tools@0.2.55
+
+#### cyrus-claude-runner
+- cyrus-claude-runner@0.2.55
+
+#### cyrus-core
+- cyrus-core@0.2.55
+
+#### cyrus-simple-agent-runner
+- cyrus-simple-agent-runner@0.2.55
+
+#### cyrus-codex-runner
+- cyrus-codex-runner@0.2.55
+
+#### cyrus-cursor-runner
+- cyrus-cursor-runner@0.2.55
+
+#### cyrus-config-updater
+- cyrus-config-updater@0.2.55
+
+#### cyrus-linear-event-transport
+- cyrus-linear-event-transport@0.2.55
+
+#### cyrus-github-event-transport
+- cyrus-github-event-transport@0.2.55
+
+#### cyrus-gitlab-event-transport
+- cyrus-gitlab-event-transport@0.2.55
+
+#### cyrus-slack-event-transport
+- cyrus-slack-event-transport@0.2.55
+
+#### cyrus-gemini-runner
+- cyrus-gemini-runner@0.2.55
+
+#### cyrus-edge-worker
+- cyrus-edge-worker@0.2.55
+
+#### cyrus-ai (CLI)
+- cyrus-ai@0.2.55
 
 ## [0.2.54] - 2026-05-22
 
