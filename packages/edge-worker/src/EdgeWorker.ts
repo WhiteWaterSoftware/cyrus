@@ -17,6 +17,7 @@ import {
 	HttpSessionStore,
 	normalizeMcpHttpTransport,
 } from "cyrus-claude-runner";
+import { getCyrusAppUrl } from "cyrus-cloudflare-tunnel-client";
 import { CodexRunner } from "cyrus-codex-runner";
 import { ConfigUpdater } from "cyrus-config-updater";
 import type {
@@ -302,22 +303,19 @@ export class EdgeWorker extends EventEmitter {
 		);
 
 		// Mirror Claude SDK session transcripts to the hosted control plane
-		// when CYRUS_APP_URL (destination), CYRUS_API_KEY (proof of team
-		// ownership), and CYRUS_TEAM_ID (which team the transcripts belong to)
-		// are all configured. If any is missing the store stays null and the
-		// SDK falls back to local JSONL only. Operators can also opt out
+		// when CYRUS_API_KEY (proof of team ownership) and CYRUS_TEAM_ID
+		// (which team the transcripts belong to) are configured. The
+		// destination URL defaults to DEFAULT_CYRUS_APP_URL but can be
+		// overridden via CYRUS_APP_URL for preview environments. If either
+		// of the required vars is missing the store stays null and the SDK
+		// falls back to local JSONL only. Operators can also opt out
 		// explicitly by setting CYRUS_DISABLE_REMOTE_SESSION_STORE=1, which
-		// keeps transcripts local even when the three vars above are present.
-		const sessionStoreBaseUrl = process.env.CYRUS_APP_URL;
+		// keeps transcripts local even when the vars above are present.
+		const sessionStoreBaseUrl = getCyrusAppUrl();
 		const sessionStoreApiKey = process.env.CYRUS_API_KEY;
 		const sessionStoreTeamId = process.env.CYRUS_TEAM_ID;
 		const sessionStoreDisabled = this.isRemoteSessionStoreDisabled();
-		if (
-			!sessionStoreDisabled &&
-			sessionStoreBaseUrl &&
-			sessionStoreApiKey &&
-			sessionStoreTeamId
-		) {
+		if (!sessionStoreDisabled && sessionStoreApiKey && sessionStoreTeamId) {
 			this.claudeSessionStore = new HttpSessionStore({
 				baseUrl: sessionStoreBaseUrl,
 				apiKey: sessionStoreApiKey,
@@ -329,7 +327,6 @@ export class EdgeWorker extends EventEmitter {
 			);
 		} else if (
 			sessionStoreDisabled &&
-			sessionStoreBaseUrl &&
 			sessionStoreApiKey &&
 			sessionStoreTeamId
 		) {
@@ -5575,8 +5572,8 @@ ${taskSection}`;
 	private getFailureModesClient(): FailureModesHttpClient | null {
 		if (this.failureModesClient) return this.failureModesClient;
 		const apiKey = process.env.CYRUS_API_KEY?.trim();
-		const baseUrl = process.env.CYRUS_APP_URL?.trim();
-		if (!apiKey || !baseUrl) return null;
+		if (!apiKey) return null;
+		const baseUrl = getCyrusAppUrl();
 		this.failureModesClient = createFetchFailureModesClient({
 			baseUrl,
 			apiKey,

@@ -4,6 +4,14 @@ import { join } from "node:path";
 import type { SDKMessage } from "cyrus-claude-runner";
 import { vi } from "vitest";
 
+// Disable the remote session store in tests so EdgeWorker construction
+// doesn't try to instantiate HttpSessionStore. Tests using a partial
+// `cyrus-claude-runner` mock can omit the HttpSessionStore export, and
+// the CYRUS_APP_URL fallback (DEFAULT_CYRUS_APP_URL) means the store
+// would otherwise activate whenever CYRUS_API_KEY + CYRUS_TEAM_ID are
+// present in the developer's shell env.
+process.env.CYRUS_DISABLE_REMOTE_SESSION_STORE = "1";
+
 // Keep Claude SDK debug output inside the test workspace to avoid HOME write restrictions.
 const claudeConfigDir =
 	process.env.CLAUDE_CONFIG_DIR ??
