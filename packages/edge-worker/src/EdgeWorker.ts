@@ -130,6 +130,9 @@ import {
 import {
 	type CyrusToolsOptions,
 	createCyrusToolsServer,
+	createFetchFailureModesClient,
+	type FailureModesHttpClient,
+	type ResolvedSession,
 } from "cyrus-mcp-tools";
 import {
 	SlackEventTransport,
@@ -461,8 +464,6 @@ export class EdgeWorker extends EventEmitter {
 					parentSessionId,
 					prompt,
 					childSessionId,
-					repo,
-					this.agentSessionManager,
 				);
 			},
 		);
@@ -2670,8 +2671,6 @@ ${taskSection}`;
 		parentSessionId: string,
 		prompt: string,
 		childSessionId: string,
-		_childRepo: RepositoryConfig,
-		childAgentSessionManager: AgentSessionManager,
 	): Promise<void> {
 		const log = this.logger.withContext({ sessionId: parentSessionId });
 		log.info(
@@ -2702,8 +2701,7 @@ ${taskSection}`;
 		);
 
 		// Get the child session to access its workspace path
-		// Child session is in the child's manager (passed in from the callback)
-		const childSession = childAgentSessionManager.getSession(childSessionId);
+		const childSession = this.agentSessionManager.getSession(childSessionId);
 		const childWorkspaceDirs: string[] = [];
 		if (childSession) {
 			childWorkspaceDirs.push(childSession.workspace.path);
@@ -5562,19 +5560,157 @@ ${taskSection}`;
 		);
 	}
 
-	private createCyrusToolsOptions(parentSessionId?: string): CyrusToolsOptions {
+	private failureModesClient: FailureModesHttpClient | null = null;
+
+	/**
+	 * Lazily build the HTTP client used by `log_failure_mode` to POST to
+	 * cyrus-hosted. Uses `CYRUS_APP_URL` (the same env var the remote
+	 * session-store client reads, see top of this file) so preview
+	 * environments and prod share a single way to point at a control
+	 * plane. Returns null when either the URL or the `CYRUS_API_KEY` are
+	 * missing — in that mode the tool is simply not registered, so
+	 * customer-mode CLI users without a control plane don't see a broken
+	 * tool.
+	 */
+	private getFailureModesClient(): FailureModesHttpClient | null {
+		if (this.failureModesClient) return this.failureModesClient;
+		const apiKey = process.env.CYRUS_API_KEY?.trim();
+		const baseUrl = process.env.CYRUS_APP_URL?.trim();
+		if (!apiKey || !baseUrl) return null;
+		this.failureModesClient = createFetchFailureModesClient({
+			baseUrl,
+			apiKey,
+		});
+		return this.failureModesClient;
+	}
+
+	/**
+	 * Resolve a working-directory string to the agent session id that owns
+	 * that workspace. The `log_failure_mode` MCP tool calls this with the
+	 * agent's reported `cwd`. We normalize and compare against each known
+	 * session's `workspace.path` (and any sub-repo paths the session opens).
+	 */
+	/**
+	 * Resolve a working-directory string to the rich session bundle a
+	 * Cyrus team member needs to triage a failure-mode report: the
+	 * internal session id (for dedup), the runner session id + runner
+	 * type (so triage can pull the Claude/Gemini/Codex/Cursor transcript),
+	 * the Linear AgentSession + source-issue identifiers (so triage can
+	 * jump to the customer thread), and the workspace path (for repro).
+	 *
+	 * Returns null only when no session matches. We prefer an exact
+	 * workspace-path or sub-repo-path match; if neither hits, we fall
+	 * back to a prefix match for nested cwds (e.g. shells in a subdir).
+	 */
+	/**
+	 * Aggregator over every place active sessions live in this process.
+	 * Today: the primary AgentSessionManager (issue sessions) and the
+	 * ChatSessionHandler's private one (Slack / GitHub-PR-chat / future
+	 * chat platforms). New session origins should be added here so
+	 * downstream consumers (currently just resolveSessionFromCwd) keep
+	 * working without modification — single open extension point (OCP),
+	 * single responsibility (SRP: this method's only job is "where do
+	 * sessions live?", separate from "how do we match one by cwd?").
+	 */
+	private getAllKnownSessions(): CyrusAgentSession[] {
+		return [
+			...this.agentSessionManager.getAllSessions(),
+			...(this.chatSessionHandler?.getAllChatSessions() ?? []),
+		];
+	}
+
+	private resolveSessionFromCwd(cwd: string): ResolvedSession | null {
+		if (!cwd) return null;
+		const normalize = (p: string) => p.replace(/\/+$/, "");
+		const target = normalize(cwd);
+
+		const sessions = this.getAllKnownSessions();
+
+		const exact = sessions.find((session) => {
+			if (normalize(session.workspace?.path ?? "") === target) return true;
+			const repoPaths = session.workspace?.repoPaths;
+			if (repoPaths) {
+				for (const p of Object.values(repoPaths)) {
+					if (typeof p === "string" && normalize(p) === target) return true;
+				}
+			}
+			return false;
+		});
+
+		const prefix = exact
+			? undefined
+			: sessions.find((session) => {
+					const root = normalize(session.workspace?.path ?? "");
+					return root && target.startsWith(`${root}/`);
+				});
+
+		const session = exact ?? prefix;
+		if (!session) return null;
+
+		const runnerType = session.claudeSessionId
+			? "claude"
+			: session.geminiSessionId
+				? "gemini"
+				: session.codexSessionId
+					? "codex"
+					: session.cursorSessionId
+						? "cursor"
+						: null;
+		const runnerSessionId =
+			session.claudeSessionId ??
+			session.geminiSessionId ??
+			session.codexSessionId ??
+			session.cursorSessionId ??
+			null;
+
+		const sessionSource = session.id.startsWith("github-")
+			? "github"
+			: session.id.startsWith("gitlab-")
+				? "gitlab"
+				: session.id.startsWith("slack-")
+					? "slack"
+					: (session.issueContext?.trackerId ?? "linear");
+
+		// For Linear-source sessions, `session.id` is already the Linear
+		// AgentSession id (they're literally the same UUID — the v3 rename
+		// from `linearAgentActivitySessionId` to `id` kept the value). So we
+		// don't surface a separate `linearAgentSessionId` — the server keys
+		// dedup on `session_id` and that *is* the Linear AgentSession id when
+		// `session_source === 'linear'`.
 		return {
+			sessionId: session.id,
+			runnerSessionId,
+			runnerType,
+			sourceIssueIdentifier:
+				session.issueContext?.issueIdentifier ??
+				session.issue?.identifier ??
+				null,
+			workspacePath: session.workspace?.path ?? null,
+			sessionSource,
+		};
+	}
+
+	private createCyrusToolsOptions(parentSessionId?: string): CyrusToolsOptions {
+		const failureModesClient = this.getFailureModesClient();
+		const options: CyrusToolsOptions = {
 			parentSessionId,
-			onSessionCreated: (childSessionId, parentId) => {
+			onSessionCreated: (childSessionId: string, parentId: string) => {
 				this.handleChildSessionMapping(childSessionId, parentId);
 			},
-			onFeedbackDelivery: async (childSessionId, message) => {
+			onFeedbackDelivery: async (childSessionId: string, message: string) => {
 				return this.handleFeedbackDeliveryToChildSession(
 					childSessionId,
 					message,
 				);
 			},
 		};
+		if (failureModesClient) {
+			options.failureModes = {
+				resolveSessionFromCwd: (cwd: string) => this.resolveSessionFromCwd(cwd),
+				httpClient: failureModesClient,
+			};
+		}
+		return options;
 	}
 
 	private handleChildSessionMapping(
