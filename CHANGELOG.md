@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Self-reported failure modes.** Every customer-facing agent session now has access to a new `mcp__cyrus-tools__log_failure_mode` MCP tool and is instructed (via a shared system-prompt addendum appended to all Linear prompt flavors, the Slack entrypoint, and the GitHub entrypoint) to call it when the user expresses dissatisfaction or when it recognizes it has made 3+ unsuccessful attempts at the same problem. The tool POSTs to cyrus-hosted, which opens (or comments on) a Linear ticket in the internal failure-modes project so the Cyrus team can intervene before churn. Self-reporting is internal — users are not told about it. ([CYPACK-1226](https://linear.app/ceedar/issue/CYPACK-1226))
+
 ### Fixed
 - **Self-Managed GitLab MR replies** — `EdgeWorker` was instantiating `GitLabCommentService` with no `apiBaseUrl`, so every MR-reply request on a Self-Managed instance hit `gitlab.com` and 404'd. The base URL is now derived from the URL origin of the first configured repo with a `gitlabUrl`, so MR replies post against the correct host. Thanks [@tenforty](https://github.com/tenfourty) ([#1191](https://github.com/cyrusagents/cyrus/pull/1191))
 
