@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.53] - 2026-05-22
+
 ### Added
 - **Per-platform allowed tools — explicit defaults exported from `cyrus-core`** — `cyrus-core` now exports three canonical lists (`LINEAR_DEFAULT_ALLOWED_TOOLS`, `SLACK_DEFAULT_ALLOWED_TOOLS`, `GITHUB_DEFAULT_ALLOWED_TOOLS`) plus a `getDefaultAllowedTools(platform)` resolver. Each list is **completely explicit** — workspace MCP prefixes (`mcp__linear`, `mcp__cyrus-tools`, `mcp__cyrus-docs`, and for Slack `mcp__slack`) are members of the list, not implicitly appended at runtime. cyrus-hosted imports the same constants so the source of truth lives in one place. ([CYHOST-967](https://linear.app/ceedar/issue/CYHOST-967))
 - **`EdgeConfig` accepts `slackAllowedTools` and `githubAllowedTools`** — two optional top-level keys for team-level platform overrides. When unset, the resolver falls back to the matching cyrus-core default. ([CYHOST-967](https://linear.app/ceedar/issue/CYHOST-967))
@@ -25,6 +27,53 @@ All notable changes to this project will be documented in this file.
 ### Security
 - **Patched 4 transitive dependency advisories** — Bumped `pnpm.overrides` for `brace-expansion` (≥5.0.6, DoS via large numeric ranges defeating `max` protection), `ws` (≥8.20.1, uninitialized memory disclosure on `close()` with `TypedArray` reason), `protobufjs` (≥7.5.8, DoS via unbounded recursive JSON descriptor expansion), and `uuid` (≥11.1.1, missing buffer bounds check in `v3`/`v5`/`v6`). `pnpm audit` now reports zero advisories. ([CYPACK-1230](https://linear.app/ceedar/issue/CYPACK-1230), [#1238](https://github.com/cyrusagents/cyrus/pull/1238))
 - **Patched 9 transitive dependency advisories** — Bumped `pnpm.overrides` for `hono` (≥4.12.18, fixes CSS injection / JWT validation / Cache Middleware cross-user leakage), `fast-uri` (≥3.1.2, path traversal + host confusion), `ip-address` (≥10.1.1, `Address6` XSS), `@anthropic-ai/sdk` (≥0.91.1, insecure default file permissions in local filesystem memory tool), and `@opentelemetry/sdk-node` / `@opentelemetry/exporter-prometheus` (≥0.217.0, Prometheus exporter process crash via malformed HTTP request). `pnpm audit` now reports zero advisories. ([CYPACK-1206](https://linear.app/ceedar/issue/CYPACK-1206))
+
+### Packages
+
+#### cyrus-cloudflare-tunnel-client
+- cyrus-cloudflare-tunnel-client@0.2.53
+
+#### cyrus-mcp-tools
+- cyrus-mcp-tools@0.2.53
+
+#### cyrus-claude-runner
+- cyrus-claude-runner@0.2.53
+
+#### cyrus-core
+- cyrus-core@0.2.53
+
+#### cyrus-simple-agent-runner
+- cyrus-simple-agent-runner@0.2.53
+
+#### cyrus-codex-runner
+- cyrus-codex-runner@0.2.53
+
+#### cyrus-cursor-runner
+- cyrus-cursor-runner@0.2.53
+
+#### cyrus-config-updater
+- cyrus-config-updater@0.2.53
+
+#### cyrus-linear-event-transport
+- cyrus-linear-event-transport@0.2.53
+
+#### cyrus-github-event-transport
+- cyrus-github-event-transport@0.2.53
+
+#### cyrus-gitlab-event-transport
+- cyrus-gitlab-event-transport@0.2.53
+
+#### cyrus-slack-event-transport
+- cyrus-slack-event-transport@0.2.53
+
+#### cyrus-gemini-runner
+- cyrus-gemini-runner@0.2.53
+
+#### cyrus-edge-worker
+- cyrus-edge-worker@0.2.53
+
+#### cyrus-ai (CLI)
+- cyrus-ai@0.2.53
 
 ## [0.2.52] - 2026-05-13
 
