@@ -137,7 +137,7 @@ export class McpConfigService {
 		if (slackBotToken) {
 			mcpConfig.slack = {
 				command: "npx",
-				args: ["-y", "slack-mcp-server@latest", "--transport", "stdio"],
+				args: ["-y", "slack-mcp-server@1.2.3", "--transport", "stdio"],
 				env: {
 					SLACK_MCP_XOXB_TOKEN: slackBotToken,
 				},
