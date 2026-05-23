@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
-- **Pinned the Slack MCP server to v1.2.3.** v1.3.0 of `slack-mcp-server` requires additional Slack OAuth scopes; pinning avoids breaking existing Slack installations that haven't re-authorized. ([CYPACK-1239](https://linear.app/ceedar/issue/CYPACK-1239))
+- **Pinned the Slack MCP server to v1.2.3.** v1.3.0 of `slack-mcp-server` requires additional Slack OAuth scopes; pinning avoids breaking existing Slack installations that haven't re-authorized. ([CYPACK-1239](https://linear.app/ceedar/issue/CYPACK-1239), [#1247](https://github.com/cyrusagents/cyrus/pull/1247))
 
 ## [0.2.56] - 2026-05-22
 
