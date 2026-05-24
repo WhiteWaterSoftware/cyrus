@@ -651,19 +651,24 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 					// particularly with CLAUDE.md files, settings files, and custom slash commands,
 					// see: https://docs.claude.com/en/docs/claude-code/sdk/migration-guide#settings-sources-no-longer-loaded-by-default
 					settingSources: ["user", "project", "local"],
-					env: {
-						...buildBaseSessionEnv(),
-						// CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is intentionally NOT set while
-						// the Linux bubblewrap sandbox side effects it triggers are being
-						// investigated. The sandbox requirements precheck is still run
-						// above so the diagnostics remain available when we re-enable.
-						// See: CYPACK-1108.
-						...this.repositoryEnv,
-						...this.config.additionalEnv,
-						// When logging at DEBUG level, enable the SDK's own debug output so
-						// --debug-to-stderr and DEBUG=1 propagate to the Claude subprocess.
-						...(isDebugLogging && { DEBUG_CLAUDE_AGENT_SDK: "1" }),
-					},
+					env: (() => {
+						const env = {
+							...buildBaseSessionEnv(),
+							// CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is intentionally NOT set while
+							// the Linux bubblewrap sandbox side effects it triggers are being
+							// investigated. The sandbox requirements precheck is still run
+							// above so the diagnostics remain available when we re-enable.
+							// See: CYPACK-1108.
+							...this.repositoryEnv,
+							...this.config.additionalEnv,
+							// When logging at DEBUG level, enable the SDK's own debug output so
+							// --debug-to-stderr and DEBUG=1 propagate to the Claude subprocess.
+							...(isDebugLogging && { DEBUG_CLAUDE_AGENT_SDK: "1" }),
+						};
+						// Remove debug flag if not in debug mode even if inherited from parent env.
+						if (!isDebugLogging) delete env.DEBUG_CLAUDE_AGENT_SDK;
+						return env;
+					})(),
 					...(this.config.workingDirectory && {
 						cwd: this.config.workingDirectory,
 					}),

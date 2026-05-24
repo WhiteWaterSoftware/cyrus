@@ -58,8 +58,10 @@ export const availableTools = [
 	"CronCreate",
 	"CronDelete",
 	"CronList",
-	"RemoteTrigger",
 	"ScheduleWakeup",
+
+	// Language Server Protocol tools
+	"LSP",
 
 	// Monitoring and task lifecycle
 	"Monitor",
@@ -98,6 +100,7 @@ export const readOnlyTools: ToolName[] = [
 	"EnterPlanMode",
 	"ExitPlanMode",
 	"ToolSearch",
+	"LSP",
 ];
 
 /**
