@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Updated `@anthropic-ai/claude-agent-sdk` from `0.2.123` to `0.3.150` and `@anthropic-ai/sdk` from `^0.91.0` to `^0.98.0`. Refreshed tool allowance lists: removed `RemoteTrigger` (no longer available in SDK 0.3.150+). Fixed `@anthropic-ai/sdk` 0.98.0 breaking change: adds `diagnostics: null` to `BetaMessage` mocks in codex-runner, cursor-runner, gemini-runner. Fixed bug where `DEBUG_CLAUDE_AGENT_SDK=1` could be inherited from parent env in non-debug sessions. See [SDK changelog](https://github.com/anthropics/claude-agent-sdk-typescript/blob/main/CHANGELOG.md). ([CYPACK-1247](https://linear.app/ceedar/issue/CYPACK-1247))
+
 ## [0.2.57] - 2026-05-22
 
 ### Fixed
