@@ -1,18 +1,18 @@
 /**
  * Optional system-prompt addendum that tells the agent it has access to the
- * `agent-browser` CLI (Playwright-backed) and a local Chromium for taking
- * screenshots and driving real browsers.
+ * `agent-browser` CLI (Playwright-backed) for taking screenshots and driving
+ * real browsers.
  *
  * Only injected when the environment variable `CYRUS_BROWSER_USE_ENABLED` is
  * set to a truthy value. cyrus-hosted sets this on cloud-runtime droplets
- * (where chromium + agent-browser are pre-installed) and leaves it unset for
- * self-host runtimes (where the binaries may not be available).
+ * (where the binaries are pre-installed) and leaves it unset for self-host
+ * runtimes (where they may not be available).
  */
 export const BROWSER_USE_PROMPT_ADDENDUM = `
 <browser_use>
 You have access to the \`agent-browser\` CLI (a Playwright-backed browser
-automation tool) and a local Chromium install. Use it to verify frontend
-changes, capture screenshots for the user, and drive real browser flows.
+automation tool). Use it to verify frontend changes, capture screenshots
+for the user, and drive real browser flows.
 
 **When to use it:**
 - After making UI or frontend changes, open the running dev server in a
