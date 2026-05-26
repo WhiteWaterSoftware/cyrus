@@ -20,6 +20,7 @@ import type {
 } from "cyrus-core";
 import { buildIntentToAddHook } from "./hooks/IntentToAddHook.js";
 import { buildPrMarkerHook } from "./hooks/PrMarkerHook.js";
+import { appendBrowserUseAddendum } from "./prompts/browserUsePromptAddendum.js";
 import { appendFailureModeAddendum } from "./prompts/failureModePromptAddendum.js";
 
 /**
@@ -241,7 +242,9 @@ export class RunnerConfigBuilder {
 			workspaceName: input.workspaceName,
 			cyrusHome: input.cyrusHome,
 			autoMemoryDirectory,
-			appendSystemPrompt: appendFailureModeAddendum(input.systemPrompt),
+			appendSystemPrompt: appendBrowserUseAddendum(
+				appendFailureModeAddendum(input.systemPrompt),
+			),
 			...(mcpConfig ? { mcpConfig } : {}),
 			...(mcpConfigPath ? { mcpConfigPath } : {}),
 			...(input.resumeSessionId
@@ -363,7 +366,9 @@ export class RunnerConfigBuilder {
 			cyrusHome: input.cyrusHome,
 			mcpConfigPath,
 			mcpConfig,
-			appendSystemPrompt: appendFailureModeAddendum(input.systemPrompt),
+			appendSystemPrompt: appendBrowserUseAddendum(
+				appendFailureModeAddendum(input.systemPrompt),
+			),
 			// Priority order: label override > repository config > global default
 			model: finalModel,
 			fallbackModel:

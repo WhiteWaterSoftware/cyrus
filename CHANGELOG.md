@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Optional browser-use system prompt addendum that tells the agent it has access to the `agent-browser` CLI and a local Chromium for screenshots and browser automation. Enabled by setting the `CYRUS_BROWSER_USE_ENABLED` environment variable to `true` (off by default for self-host). ([CYHOST-991](https://linear.app/ceedar/issue/CYHOST-991))
+
 ## [0.2.57] - 2026-05-22
 
 ### Fixed
