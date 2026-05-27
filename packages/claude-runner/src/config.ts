@@ -58,10 +58,10 @@ export const availableTools = [
 	"CronCreate",
 	"CronDelete",
 	"CronList",
-	"RemoteTrigger",
 	"ScheduleWakeup",
 
 	// Monitoring and task lifecycle
+	"LSP",
 	"Monitor",
 	"TaskOutput",
 	"TaskStop",
@@ -93,6 +93,7 @@ export const readOnlyTools: ToolName[] = [
 	"TaskList",
 	"Task",
 	"Skill",
+	"LSP",
 	"Monitor",
 	"TaskOutput",
 	"EnterPlanMode",

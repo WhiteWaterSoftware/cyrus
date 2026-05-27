@@ -39,8 +39,8 @@ describe("config", () => {
 				"CronCreate",
 				"CronDelete",
 				"CronList",
-				"RemoteTrigger",
 				"ScheduleWakeup",
+				"LSP",
 				"Monitor",
 				"TaskOutput",
 				"TaskStop",
@@ -64,13 +64,14 @@ describe("config", () => {
 				"TaskList",
 				"Task",
 				"Skill",
+				"LSP",
 				"Monitor",
 				"TaskOutput",
 				"EnterPlanMode",
 				"ExitPlanMode",
 				"ToolSearch",
 			]);
-			expect(readOnlyTools).toHaveLength(16);
+			expect(readOnlyTools).toHaveLength(17);
 		});
 
 		it("should define write tools", () => {

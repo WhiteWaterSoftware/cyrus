@@ -68,7 +68,6 @@ export const LINEAR_DEFAULT_ALLOWED_TOOLS = [
 	"CronCreate",
 	"CronDelete",
 	"CronList",
-	"RemoteTrigger",
 	"ScheduleWakeup",
 
 	// Monitoring + discovery
@@ -191,7 +190,6 @@ export const GITHUB_DEFAULT_ALLOWED_TOOLS = [
 	"CronCreate",
 	"CronDelete",
 	"CronList",
-	"RemoteTrigger",
 	"ScheduleWakeup",
 
 	// Monitoring + discovery
