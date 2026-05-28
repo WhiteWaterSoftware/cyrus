@@ -207,6 +207,7 @@ export class EdgeWorker extends EventEmitter {
 	private sessionRepositories: Map<string, string> = new Map(); // Maps session ID to repository ID
 	private lastStopTimeBySession: Map<string, number> = new Map(); // Maps session ID to timestamp of last stop signal (for double-stop detection)
 	private warmInstances: Map<string, WarmQuery> = new Map(); // Pre-warmed Claude sessions keyed by agentSessionId
+	private notifiedUnconfiguredRepos: Set<string> = new Set(); // GitHub repo full names we've already replied to about missing config (dedup per process)
 	private issueTrackers: Map<string, IIssueTrackerService> = new Map(); // one issue tracker per Linear workspace (keyed by linearWorkspaceId)
 	private linearEventTransport: LinearEventTransport | null = null; // Single event transport for webhook delivery
 	private gitHubEventTransport: GitHubEventTransport | null = null; // GitHub event transport for forwarded GitHub webhooks
@@ -1249,6 +1250,45 @@ export class EdgeWorker extends EventEmitter {
 				this.logger.warn(
 					`No repository configured for GitHub repo: ${repoFullName}`,
 				);
+
+				// Only reply on signals where the user clearly directed something at us:
+				// an explicit @-mention, or a pull_request_review requesting changes.
+				const wasMentioned =
+					!!botUsername && commentBody.includes(`@${botUsername}`);
+				const shouldReply = wasMentioned || isPullRequestReview;
+
+				if (
+					shouldReply &&
+					reactionToken &&
+					prNumber &&
+					!this.notifiedUnconfiguredRepos.has(repoFullName)
+				) {
+					this.notifiedUnconfiguredRepos.add(repoFullName);
+					this.gitHubCommentService
+						.postIssueComment({
+							token: reactionToken,
+							owner: extractRepoOwner(event),
+							repo: extractRepoName(event),
+							issueNumber: prNumber,
+							body: [
+								`Cyrus received this webhook but has no repository configured for \`${repoFullName}\`, so no agent session was started.`,
+								``,
+								`**Likely causes:**`,
+								`- The owner/org was **renamed or transferred** on GitHub. Webhooks are delivered under the current owner name, but Cyrus's stored \`githubUrl\` still points at the old one. GitHub's web redirects don't apply to webhook payloads — the config has to be updated explicitly.`,
+								`- The configured \`githubUrl\` has a typo (e.g. wrong org/owner) and doesn't match the repo this event came from.`,
+								`- The GitHub App / webhook is installed on a repo Cyrus isn't configured for at all.`,
+								``,
+								`**Fix (cyrus-hosted users):** open the repository in your Cyrus dashboard and update its GitHub URL to \`https://github.com/${repoFullName}\` — that will push a corrected \`config.json\` down to the worker. Editing the worker's \`~/.cyrus/config.json\` directly won't stick, because cyrus-hosted overwrites it on the next sync.`,
+								``,
+								`**Fix (self-hosted users):** open \`~/.cyrus/config.json\` on the worker and update the \`githubUrl\` of the relevant repository to \`https://github.com/${repoFullName}\`, or remove the GitHub App from this repo if it shouldn't be sending events to Cyrus.`,
+							].join("\n"),
+						})
+						.catch((err: unknown) => {
+							this.logger.warn(
+								`Failed to post unconfigured-repo notice: ${err instanceof Error ? err.message : err}`,
+							);
+						});
+				}
 				return;
 			}
 
