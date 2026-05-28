@@ -89,7 +89,7 @@ function serializeQueryOptionsReplacer(_key: string, value: unknown): unknown {
  *   - model / fallbackModel / maxTurns / outputFormat
  *   - system prompt SHAPE (type/preset/has-append) — not the text
  *   - tool allowlist/denylist (counts + first 50 entries)
- *   - resumeSessionId, workingDirectory, allowedDirectories
+ *   - resumeSessionId, workingDirectory, additionalDirectories
  *   - mcpServer NAMES only
  *   - presence flags for hooks/plugins/canUseTool/sandbox
  *   - env KEY NAMES only (no values)
@@ -110,8 +110,13 @@ function buildSanitizedQueryOptions(
 	if (typeof o.maxTurns === "number") out.maxTurns = o.maxTurns;
 	if (typeof o.outputFormat === "string") out.outputFormat = o.outputFormat;
 	if (typeof o.cwd === "string") out.cwd = o.cwd;
-	if (Array.isArray(o.allowedDirectories)) {
-		out.allowedDirectoryCount = (o.allowedDirectories as unknown[]).length;
+	// Per-directory Read grants are surfaced via the `Read(<dir>/**)` entries in
+	// allowedToolsPreview below; `additionalDirectories` is the only directory
+	// list actually passed to the SDK, so it's the one worth counting here.
+	if (Array.isArray(o.additionalDirectories)) {
+		out.additionalDirectoryCount = (
+			o.additionalDirectories as unknown[]
+		).length;
 	}
 	if (Array.isArray(o.settingSources)) {
 		out.settingSources = o.settingSources;
@@ -667,8 +672,15 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 					...(this.config.workingDirectory && {
 						cwd: this.config.workingDirectory,
 					}),
-					...(this.config.allowedDirectories && {
-						allowedDirectories: this.config.allowedDirectories,
+					// NOTE: there is no SDK `allowedDirectories` query option — the
+					// SDK only honors `additionalDirectories` (the `--add-dir`
+					// flag). `config.allowedDirectories` is consumed earlier to
+					// build `Read(<dir>/**)` tool grants + home-dir deny
+					// exclusions; it must NOT be forwarded here (the SDK would drop
+					// it). Use `additionalDirectories` for `--add-dir`, which also
+					// auto-loads each added dir's `.claude/skills/`.
+					...(this.config.additionalDirectories?.length && {
+						additionalDirectories: this.config.additionalDirectories,
 					}),
 					...(processedAllowedTools && { allowedTools: processedAllowedTools }),
 					...(processedDisallowedTools.length > 0 && {
