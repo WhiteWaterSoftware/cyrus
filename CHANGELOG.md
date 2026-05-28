@@ -7,8 +7,61 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - **Sessions can now Read auto-memory files they wrote.** Claude Code's auto-memory directory (`~/.claude/projects/<encoded-cwd>/memory/`) is now added to the session's allowed directories on spawn, so the agent can `Read` a `MEMORY.md` it just wrote without hitting `<tool_use_error>File is in a directory that is denied by your permission settings.`. For multi-repo sessions, each repo's encoded memory dir is allowlisted too. ([CYPACK-1253](https://linear.app/ceedar/issue/CYPACK-1253), [#1260](https://github.com/cyrusagents/cyrus/pull/1260))
 
+### Changed
+- Updated `@anthropic-ai/claude-agent-sdk` from `0.2.123` to `0.3.154` and `@anthropic-ai/sdk` from `^0.91.x` to `^0.100.0`. See [claude-agent-sdk CHANGELOG](https://github.com/anthropics/claude-agent-sdk-typescript/blob/main/CHANGELOG.md) for details. ([CYPACK-1257](https://linear.app/ceedar/issue/CYPACK-1257), [#1264](https://github.com/cyrusagents/cyrus/pull/1264))
+- Refreshed mandatory tool allowance list per SDK v0.3.154: removed deprecated `RemoteTrigger` tool, added new `Workflow` tool to `availableTools` in `config.ts` and all platform default lists in `allowed-tools-defaults.ts`. ([CYPACK-1257](https://linear.app/ceedar/issue/CYPACK-1257), [#1264](https://github.com/cyrusagents/cyrus/pull/1264))
+
+## [0.2.58] - 2026-05-26
+
 ### Added
 - **Per-repo `cyrus-teardown.sh` auto-detection** — Place a `cyrus-teardown.sh` (or `.ps1` / `.cmd` / `.bat`) script in your repository root and Cyrus runs it inside the issue's worktree directory immediately before the worktree is removed when the Linear issue is **completed**, **canceled**, or **deleted**. Symmetric to the existing `cyrus-setup.sh` mechanism — no configuration needed, just commit the script. In multi-repo issues each repo's teardown runs independently with `cwd` set to that repo's worktree subdirectory; failures in one repo do not block other repos' teardowns or worktree removal. The script gets `LINEAR_ISSUE_IDENTIFIER` in env, a 2-minute timeout, and is non-blocking on failure. Closes upstream [cyrusagents/cyrus#1065](https://github.com/cyrusagents/cyrus/issues/1065); credit to @matthewbjones for the original direction in [#1111](https://github.com/cyrusagents/cyrus/pull/1111). ([CYPACK-1219](https://linear.app/ceedar/issue/CYPACK-1219), [#1233](https://github.com/cyrusagents/cyrus/pull/1233))
+
+### Packages
+
+#### cyrus-cloudflare-tunnel-client
+- cyrus-cloudflare-tunnel-client@0.2.58
+
+#### cyrus-mcp-tools
+- cyrus-mcp-tools@0.2.58
+
+#### cyrus-claude-runner
+- cyrus-claude-runner@0.2.58
+
+#### cyrus-core
+- cyrus-core@0.2.58
+
+#### cyrus-simple-agent-runner
+- cyrus-simple-agent-runner@0.2.58
+
+#### cyrus-codex-runner
+- cyrus-codex-runner@0.2.58
+
+#### cyrus-cursor-runner
+- cyrus-cursor-runner@0.2.58
+
+#### cyrus-config-updater
+- cyrus-config-updater@0.2.58
+
+#### cyrus-linear-event-transport
+- cyrus-linear-event-transport@0.2.58
+
+#### cyrus-github-event-transport
+- cyrus-github-event-transport@0.2.58
+
+#### cyrus-gitlab-event-transport
+- cyrus-gitlab-event-transport@0.2.58
+
+#### cyrus-slack-event-transport
+- cyrus-slack-event-transport@0.2.58
+
+#### cyrus-gemini-runner
+- cyrus-gemini-runner@0.2.58
+
+#### cyrus-edge-worker
+- cyrus-edge-worker@0.2.58
+
+#### cyrus-ai (CLI)
+- cyrus-ai@0.2.58
 
 ## [0.2.57] - 2026-05-22
 
