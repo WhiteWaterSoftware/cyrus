@@ -39,7 +39,6 @@ describe("config", () => {
 				"CronCreate",
 				"CronDelete",
 				"CronList",
-				"RemoteTrigger",
 				"ScheduleWakeup",
 				"Monitor",
 				"TaskOutput",
@@ -48,7 +47,7 @@ describe("config", () => {
 				"TeamDelete",
 				"ToolSearch",
 			]);
-			expect(availableTools).toHaveLength(33);
+			expect(availableTools).toHaveLength(32);
 		});
 
 		it("should define read-only tools", () => {

@@ -58,7 +58,6 @@ export const availableTools = [
 	"CronCreate",
 	"CronDelete",
 	"CronList",
-	"RemoteTrigger",
 	"ScheduleWakeup",
 
 	// Monitoring and task lifecycle
