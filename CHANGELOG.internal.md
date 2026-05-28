@@ -4,6 +4,15 @@ This changelog documents internal development changes, refactors, tooling update
 
 ## [Unreleased]
 
+## [0.2.59] - 2026-05-28
+
+_No internal-only changes._
+
+## [0.2.58] - 2026-05-26
+
+### Added
+- **F1: `terminate-issue` command** — F1 can now drive a Linear issue to a terminal state (`completed` / `canceled` / `deleted`) via `apps/f1/f1 terminate-issue --issue-id <id> --action <completed|canceled|deleted>`. The new `CLIIssueTrackerService.terminateIssue` method updates the in-memory state (or removes the issue for `deleted`) and emits an `IssueStateChangeMessage` on the unified message bus via `CLIEventTransport.emitMessage`, so EdgeWorker's terminal-state cleanup path (stop sessions, run `cyrus-teardown.sh`, remove worktrees) is exercised end-to-end in CLI mode. EdgeWorker's CLI setup now subscribes to the transport's `"message"` event in addition to `"event"`. Unblocks F1 testing of the per-repo `cyrus-teardown.sh` feature shipped in [CYPACK-1219](https://linear.app/ceedar/issue/CYPACK-1219), and any future terminal-state behavior. ([CYPACK-1219](https://linear.app/ceedar/issue/CYPACK-1219), [#1233](https://github.com/cyrusagents/cyrus/pull/1233))
+
 ## [0.2.57] - 2026-05-22
 
 _No internal-only changes._

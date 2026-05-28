@@ -756,6 +756,12 @@ export class EdgeWorker extends EventEmitter {
 					this.handleWebhook(event as unknown as Webhook, repos);
 				});
 
+				// Listen for unified internal messages (used by F1 to emit
+				// IssueStateChangeMessage when an issue is terminated).
+				cliEventTransport.on("message", (message: InternalMessage) => {
+					this.handleMessage(message);
+				});
+
 				// Listen for errors
 				cliEventTransport.on("error", (error: Error) => {
 					this.handleError(error);
@@ -1243,6 +1249,47 @@ export class EdgeWorker extends EventEmitter {
 				this.logger.warn(
 					`No repository configured for GitHub repo: ${repoFullName}`,
 				);
+
+				// Only reply on signals where the user clearly directed something at us:
+				// an explicit @-mention, or a pull_request_review requesting changes.
+				const wasMentioned =
+					!!botUsername && commentBody.includes(`@${botUsername}`);
+				const shouldReply = wasMentioned || isPullRequestReview;
+
+				if (shouldReply && reactionToken && prNumber) {
+					// Presence of CYRUS_API_KEY indicates this worker is paired with the
+					// managed control plane (paid customer). Absence means the worker is
+					// running on the Community plan (self-managed config.json).
+					const isManagedCustomer = !!process.env.CYRUS_API_KEY;
+
+					const commonPreamble = [
+						`Cyrus received this webhook but has no repository configured for \`${repoFullName}\`, so no agent session was started.`,
+						``,
+						`**Likely causes:**`,
+						`- The owner/org was **renamed or transferred** on GitHub. Webhooks are delivered under the current owner name, but Cyrus's stored repository URL still points at the old one. GitHub's web redirects don't apply to webhook payloads — the stored URL has to be updated explicitly.`,
+						`- The stored repository URL has a typo (e.g. wrong org/owner) and doesn't match the repo this event came from.`,
+						`- The GitHub App / webhook is installed on a repo Cyrus isn't configured for at all.`,
+						``,
+					];
+
+					const fix = isManagedCustomer
+						? `**What to do:** there's currently no self-serve way to update the stored repository URL on your plan — please reach out to Cyrus support and reference \`${repoFullName}\` and we'll reconcile it on the backend.`
+						: `**What to do:** open \`~/.cyrus/config.json\` on the worker and update the \`githubUrl\` of the relevant repository to \`https://github.com/${repoFullName}\`. The worker watches the config file and will pick up the change automatically. If this repo shouldn't be sending events to Cyrus at all, remove the GitHub App from it instead.`;
+
+					this.gitHubCommentService
+						.postIssueComment({
+							token: reactionToken,
+							owner: extractRepoOwner(event),
+							repo: extractRepoName(event),
+							issueNumber: prNumber,
+							body: [...commonPreamble, fix].join("\n"),
+						})
+						.catch((err: unknown) => {
+							this.logger.warn(
+								`Failed to post unconfigured-repo notice: ${err instanceof Error ? err.message : err}`,
+							);
+						});
+				}
 				return;
 			}
 
@@ -3294,8 +3341,25 @@ ${taskSection}`;
 			this.agentSessionManager.removeSession(session.id);
 		}
 
+		// Build the set of repositories involved with this issue so per-repo
+		// cyrus-teardown.sh scripts (if present) can run before worktrees are
+		// removed. Source-of-truth is the session manager: each session's
+		// repositoryId maps to a configured RepositoryConfig.
+		const repoIds = new Set<string>();
+		for (const session of sessions) {
+			const repoId = this.sessionRepositories.get(session.id);
+			if (repoId) repoIds.add(repoId);
+		}
+		const teardownRepositories: RepositoryConfig[] = [];
+		for (const repoId of repoIds) {
+			const repo = this.repositories.get(repoId);
+			if (repo) teardownRepositories.push(repo);
+		}
+
 		// Delete worktrees for this issue, keyed by the Linear issue identifier.
-		this.gitService.deleteWorktree(message.workItemIdentifier);
+		await this.gitService.deleteWorktree(message.workItemIdentifier, {
+			repositories: teardownRepositories,
+		});
 
 		this.logger.info(
 			`Completed cleanup for ${message.workItemIdentifier}: stopped ${sessions.length} session(s)`,
