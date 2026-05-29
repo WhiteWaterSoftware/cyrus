@@ -9,6 +9,11 @@ import {
 } from "cyrus-slack-event-transport";
 import type { ChatRepositoryProvider } from "./ChatRepositoryProvider.js";
 import type { ChatPlatformAdapter } from "./ChatSessionHandler.js";
+import {
+	formatModelApiError,
+	isModelApiErrorText,
+	runnerTypeFromConstructorName,
+} from "./runner-error-formatting.js";
 
 /**
  * Slack implementation of ChatPlatformAdapter.
@@ -223,6 +228,22 @@ Supported mrkdwn syntax:
 				if (textBlock?.text) {
 					summary = textBlock.text;
 				}
+			}
+
+			// If the last assistant message is actually a model-provider API error
+			// (e.g. Claude returning "API Error: 400 ... `thinking` blocks ... cannot
+			// be modified"), it would otherwise be posted verbatim and look like
+			// Cyrus's own reply. Relabel it as a provider error and add recovery
+			// guidance so the Slack experience is recoverable.
+			if (isModelApiErrorText(summary)) {
+				const runnerType = runnerTypeFromConstructorName(
+					runner?.constructor?.name,
+				);
+				summary = formatModelApiError(
+					summary,
+					runnerType,
+					"You can try sending your message again. If this keeps happening, start a new thread to reset the conversation.",
+				);
 			}
 
 			const token = this.getSlackBotToken(event);

@@ -2,7 +2,22 @@ import { describe, expect, it } from "vitest";
 import {
 	formatModelApiError,
 	isModelApiErrorText,
+	runnerTypeFromConstructorName,
 } from "../src/runner-error-formatting";
+
+describe("runnerTypeFromConstructorName", () => {
+	it("maps known runner constructor names", () => {
+		expect(runnerTypeFromConstructorName("GeminiRunner")).toBe("gemini");
+		expect(runnerTypeFromConstructorName("CodexRunner")).toBe("codex");
+		expect(runnerTypeFromConstructorName("CursorRunner")).toBe("cursor");
+		expect(runnerTypeFromConstructorName("ClaudeRunner")).toBe("claude");
+	});
+
+	it("defaults to claude for unknown/undefined", () => {
+		expect(runnerTypeFromConstructorName(undefined)).toBe("claude");
+		expect(runnerTypeFromConstructorName("MysteryRunner")).toBe("claude");
+	});
+});
 
 describe("isModelApiErrorText", () => {
 	it("detects the canonical Claude API error text", () => {
@@ -74,6 +89,14 @@ describe("formatModelApiError", () => {
 			formatModelApiError("  API Error: Internal server error  ", "claude"),
 		).toBe(
 			"⚠️ **Claude API error** — this error came from Claude's API, not from Cyrus.\n\nAPI Error: Internal server error",
+		);
+	});
+
+	it("appends an optional recovery hint", () => {
+		expect(
+			formatModelApiError("API Error: boom", "claude", "Try again later."),
+		).toBe(
+			"⚠️ **Claude API error** — this error came from Claude's API, not from Cyrus.\n\nAPI Error: boom\n\nTry again later.",
 		);
 	});
 });

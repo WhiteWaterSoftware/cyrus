@@ -28,6 +28,7 @@ import {
 import {
 	formatModelApiError,
 	isModelApiErrorText,
+	runnerTypeFromConstructorName,
 } from "./runner-error-formatting.js";
 import type {
 	ActivityPostOptions,
@@ -241,14 +242,7 @@ export class AgentSessionManager extends EventEmitter {
 
 		// Determine which runner is being used
 		const runner = linearSession.agentRunner;
-		const runnerType =
-			runner?.constructor.name === "GeminiRunner"
-				? "gemini"
-				: runner?.constructor.name === "CodexRunner"
-					? "codex"
-					: runner?.constructor.name === "CursorRunner"
-						? "cursor"
-						: "claude";
+		const runnerType = runnerTypeFromConstructorName(runner?.constructor?.name);
 
 		// Update the appropriate session ID based on runner type
 		if (runnerType === "gemini") {
@@ -297,14 +291,7 @@ export class AgentSessionManager extends EventEmitter {
 		// Determine which runner is being used
 		const session = this.sessions.get(sessionId);
 		const runner = session?.agentRunner;
-		const runnerType =
-			runner?.constructor.name === "GeminiRunner"
-				? "gemini"
-				: runner?.constructor.name === "CodexRunner"
-					? "codex"
-					: runner?.constructor.name === "CursorRunner"
-						? "cursor"
-						: "claude";
+		const runnerType = runnerTypeFromConstructorName(runner?.constructor?.name);
 
 		const sessionEntry: CyrusAgentSessionEntry = {
 			// Set the appropriate session ID based on runner type
@@ -637,14 +624,7 @@ export class AgentSessionManager extends EventEmitter {
 		// Determine which runner is being used
 		const session = this.sessions.get(sessionId);
 		const runner = session?.agentRunner;
-		const runnerType =
-			runner?.constructor.name === "GeminiRunner"
-				? "gemini"
-				: runner?.constructor.name === "CodexRunner"
-					? "codex"
-					: runner?.constructor.name === "CursorRunner"
-						? "cursor"
-						: "claude";
+		const runnerType = runnerTypeFromConstructorName(runner?.constructor?.name);
 
 		// For error results, content may be in errors[] rather than result
 		// For success results from Claude, prefer the buffered last assistant message

@@ -21,6 +21,25 @@ const RUNNER_DISPLAY_NAMES: Record<string, string> = {
 };
 
 /**
+ * Map a runner instance's constructor name to its runner-type key.
+ * Defaults to "claude" for the base ClaudeRunner / unknown runners.
+ */
+export function runnerTypeFromConstructorName(
+	constructorName: string | undefined,
+): "claude" | "gemini" | "codex" | "cursor" {
+	switch (constructorName) {
+		case "GeminiRunner":
+			return "gemini";
+		case "CodexRunner":
+			return "codex";
+		case "CursorRunner":
+			return "cursor";
+		default:
+			return "claude";
+	}
+}
+
+/**
  * Detect whether a piece of agent output is actually an error surfaced by the
  * underlying model/agent provider rather than a genuine agent response.
  *
@@ -29,6 +48,8 @@ const RUNNER_DISPLAY_NAMES: Record<string, string> = {
  *   - "API Error: Internal server error"
  *   - "API Error: 500 {\"type\":\"error\",...}"
  *   - "API Error: Request timed out."
+ *   - "API Error: 400 messages.1.content.3: `thinking` or `redacted_thinking`
+ *      blocks in the latest assistant message cannot be modified."
  *
  * The match is anchored to the start of the (trimmed) text and case-insensitive
  * so that a legitimate response merely *mentioning* an API error elsewhere in
@@ -45,12 +66,15 @@ export function isModelApiErrorText(text: string | undefined | null): boolean {
  *
  * @param content - The raw error text (e.g. "API Error: Internal server error")
  * @param runnerType - The runner that produced the error ("claude" | "gemini" | "codex" | "cursor")
+ * @param recoveryHint - Optional, surface-specific recovery guidance appended after the body
  */
 export function formatModelApiError(
 	content: string,
 	runnerType: string,
+	recoveryHint?: string,
 ): string {
 	const provider = RUNNER_DISPLAY_NAMES[runnerType] ?? "the agent";
 	const body = content.trim();
-	return `⚠️ **${provider} API error** — this error came from ${provider}'s API, not from Cyrus.\n\n${body}`;
+	const suffix = recoveryHint ? `\n\n${recoveryHint}` : "";
+	return `⚠️ **${provider} API error** — this error came from ${provider}'s API, not from Cyrus.\n\n${body}${suffix}`;
 }
