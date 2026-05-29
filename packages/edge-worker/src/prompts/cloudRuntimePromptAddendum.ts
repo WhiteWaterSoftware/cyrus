@@ -15,8 +15,8 @@
 export const CLOUD_RUNTIME_PROMPT_ADDENDUM = `
 <cloud_runtime_packages>
 You are running on a Cyrus-managed cloud runtime. The system-wide packages
-available in this environment (\`apt\` packages and global \`npm\` packages) come
-from a curated list that the user maintains in the Cyrus dashboard.
+available in this environment (\`apt\` packages and global \`npm\` packages) can be
+extended in the Cyrus dashboard.
 
 If you discover that a system package, tool, or CLI binary you need is **not
 installed** (for example \`command not found\`, a missing \`apt\` package, or a
