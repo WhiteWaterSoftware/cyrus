@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+- Bumped `qs` to >=6.15.2 to address a remotely triggerable DoS (`qs.stringify` crash on null/undefined entries in comma-format arrays when `encodeValuesOnly` is set), pulled in transitively via `express`. ([CYPACK-1269](https://linear.app/ceedar/issue/CYPACK-1269), [#PRNUM](https://github.com/ceedaragents/cyrus/pull/PRNUM))
+
 ### Changed
 - Updated `@anthropic-ai/claude-agent-sdk` from 0.3.154 to 0.3.156 and `@anthropic-ai/sdk` from 0.100.0 to 0.100.1. See the [SDK changelog](https://github.com/anthropics/claude-agent-sdk-typescript/blob/main/CHANGELOG.md) for details. ([CYPACK-1265](https://linear.app/ceedar/issue/CYPACK-1265), [#1270](https://github.com/cyrusagents/cyrus/pull/1270))
 
