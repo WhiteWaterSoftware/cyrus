@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.61] - 2026-06-01
+
 ### Security
 - Bumped `qs` to >=6.15.2 to address a remotely triggerable DoS (`qs.stringify` crash on null/undefined entries in comma-format arrays when `encodeValuesOnly` is set), pulled in transitively via `express`. ([CYPACK-1269](https://linear.app/ceedar/issue/CYPACK-1269), [#1274](https://github.com/ceedaragents/cyrus/pull/1274))
 
@@ -15,6 +17,53 @@ All notable changes to this project will be documented in this file.
 ### Added
 - New "PR review trigger" control: when disabled, a pull request review that requests changes on a Cyrus-opened PR no longer auto-starts a Cyrus session or posts an acknowledgement comment. Enabled by default, so existing behaviour is unchanged unless you turn it off. ([CYPACK-1273](https://linear.app/ceedar/issue/CYPACK-1273), [#1278](https://github.com/cyrusagents/cyrus/pull/1278))
 - A repository can now ship its own skills: any skill directories under `<repo>/.claude/skills/` are automatically discovered and made available to the agent whenever Cyrus works in that repo — for single-repo issues, multi-repo issues (skills from every participating repo are combined), and GitHub/GitLab mentions alike. ([CYPACK-1261](https://linear.app/ceedar/issue/CYPACK-1261), [#1268](https://github.com/cyrusagents/cyrus/pull/1268))
+
+### Packages
+
+#### cyrus-cloudflare-tunnel-client
+- cyrus-cloudflare-tunnel-client@0.2.61
+
+#### cyrus-mcp-tools
+- cyrus-mcp-tools@0.2.61
+
+#### cyrus-claude-runner
+- cyrus-claude-runner@0.2.61
+
+#### cyrus-core
+- cyrus-core@0.2.61
+
+#### cyrus-simple-agent-runner
+- cyrus-simple-agent-runner@0.2.61
+
+#### cyrus-codex-runner
+- cyrus-codex-runner@0.2.61
+
+#### cyrus-cursor-runner
+- cyrus-cursor-runner@0.2.61
+
+#### cyrus-config-updater
+- cyrus-config-updater@0.2.61
+
+#### cyrus-linear-event-transport
+- cyrus-linear-event-transport@0.2.61
+
+#### cyrus-github-event-transport
+- cyrus-github-event-transport@0.2.61
+
+#### cyrus-gitlab-event-transport
+- cyrus-gitlab-event-transport@0.2.61
+
+#### cyrus-slack-event-transport
+- cyrus-slack-event-transport@0.2.61
+
+#### cyrus-gemini-runner
+- cyrus-gemini-runner@0.2.61
+
+#### cyrus-edge-worker
+- cyrus-edge-worker@0.2.61
+
+#### cyrus-ai (CLI)
+- cyrus-ai@0.2.61
 
 ## [0.2.60] - 2026-05-28
 
