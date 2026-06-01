@@ -11,6 +11,18 @@ import type { ChatRepositoryProvider } from "./ChatRepositoryProvider.js";
 import type { ChatPlatformAdapter } from "./ChatSessionHandler.js";
 
 /**
+ * Sentinel the agent emits when it has decided a Slack message does not warrant
+ * a reply. `postReply` recognizes it and stays silent instead of posting.
+ *
+ * This is what makes the "only respond when relevant" policy in the system
+ * prompt actually take effect: because every completed turn would otherwise be
+ * posted back to the thread, the agent needs an explicit way to say "nothing to
+ * post here". Kept as a single constant so the prompt and the suppression check
+ * can never drift apart.
+ */
+export const SLACK_NO_RESPONSE_SENTINEL = "<<NO_RESPONSE>>";
+
+/**
  * Slack implementation of ChatPlatformAdapter.
  *
  * Contains all Slack-specific logic extracted from EdgeWorker:
@@ -114,11 +126,20 @@ ${repositoryPaths.map((path) => `- ${path}`).join("\n")}
 ## Repository Access
 - No repository paths are configured for this chat session.`;
 
-		return `You are responding to a Slack @mention.
+		return `You are participating in a Slack thread.
 
 ## Context
 - **Requested by**: ${event.payload.user}
 - **Channel**: ${event.payload.channel}
+
+## When to Respond (IMPORTANT)
+- After you are first @mentioned, you receive **every** subsequent message in this thread, not just the ones aimed at you. Do not treat every message as a request for you.
+- Respond ONLY when at least one of these is true:
+  1. The message asks a question you can genuinely and helpfully answer, OR
+  2. Someone addresses you directly — by name ("Cyrus, …") or with an @mention.
+- For anything else — side conversation between people, acknowledgements ("thanks", "👍"), status chatter, or messages clearly not directed at you — do NOT reply.
+- When you should stay silent, output exactly \`${SLACK_NO_RESPONSE_SENTINEL}\` and nothing else. Do not explain why you're staying silent — just emit the token. (Emitting it is how you stay quiet; any other text gets posted to the thread.)
+- When you do respond, be genuinely helpful and concise.
 
 ## Instructions
 - You are running in a transient workspace, not associated with any code repository
@@ -233,6 +254,16 @@ Supported mrkdwn syntax:
 				if (textBlock?.text) {
 					summary = textBlock.text;
 				}
+			}
+
+			// The agent emits the no-response sentinel when it judged this message
+			// didn't warrant a reply (see the "When to Respond" system prompt
+			// section). Honor that by posting nothing.
+			if (summary.trim() === SLACK_NO_RESPONSE_SENTINEL) {
+				this.logger.info(
+					`Slack agent opted not to respond in channel ${event.payload.channel} (no-response sentinel)`,
+				);
+				return;
 			}
 
 			const token = this.getSlackBotToken(event);

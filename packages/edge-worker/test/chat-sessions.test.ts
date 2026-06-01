@@ -1,13 +1,17 @@
 import { join } from "node:path";
 import { getReadOnlyTools } from "cyrus-claude-runner";
 import type { RepositoryConfig } from "cyrus-core";
-import { describe, expect, it, vi } from "vitest";
+import { SlackMessageService } from "cyrus-slack-event-transport";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatRepositoryProvider } from "../src/ChatRepositoryProvider.js";
 import { LiveChatRepositoryProvider } from "../src/ChatRepositoryProvider.js";
 import type { ChatPlatformAdapter } from "../src/ChatSessionHandler.js";
 import { ChatSessionHandler } from "../src/ChatSessionHandler.js";
 import type { RunnerConfigBuilder } from "../src/RunnerConfigBuilder.js";
-import { SlackChatAdapter } from "../src/SlackChatAdapter.js";
+import {
+	SLACK_NO_RESPONSE_SENTINEL,
+	SlackChatAdapter,
+} from "../src/SlackChatAdapter.js";
 import { TEST_CYRUS_CHAT } from "./test-dirs.js";
 
 function createMockRunnerConfigBuilder(): RunnerConfigBuilder {
@@ -220,6 +224,78 @@ describe("SlackChatAdapter session initiation", () => {
 		expect(
 			adapter.isSessionInitiatingEvent({ eventType: "message" } as any),
 		).toBe(false);
+	});
+});
+
+describe("SlackChatAdapter responding policy", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		delete process.env.SLACK_BOT_TOKEN;
+	});
+
+	const slackEvent = (text: string) =>
+		({
+			eventType: "message",
+			eventId: "Ev1",
+			teamId: "T1",
+			slackBotToken: "xoxb-test",
+			payload: {
+				type: "message",
+				user: "U1",
+				channel: "C1",
+				text,
+				ts: "1700000000.000200",
+				thread_ts: "1700000000.000100",
+				event_ts: "1700000000.000200",
+			},
+		}) as any;
+
+	const runnerWithReply = (text: string) =>
+		({
+			getMessages: () => [
+				{ type: "assistant", message: { content: [{ type: "text", text }] } },
+			],
+		}) as any;
+
+	it("documents the when-to-respond policy and the silence sentinel in the system prompt", () => {
+		const adapter = new SlackChatAdapter(createStaticProvider([]));
+		const prompt = adapter.buildSystemPrompt(slackEvent("anything"));
+		expect(prompt).toContain("## When to Respond");
+		expect(prompt).toContain("Someone addresses you directly");
+		expect(prompt).toContain(SLACK_NO_RESPONSE_SENTINEL);
+	});
+
+	it("does NOT post to Slack when the agent emits the no-response sentinel", async () => {
+		const adapter = new SlackChatAdapter(createStaticProvider([]));
+		const postSpy = vi
+			.spyOn(SlackMessageService.prototype, "postMessage")
+			.mockResolvedValue({} as any);
+
+		await adapter.postReply(
+			slackEvent("thanks team!"),
+			runnerWithReply(`  ${SLACK_NO_RESPONSE_SENTINEL}\n`),
+		);
+
+		expect(postSpy).not.toHaveBeenCalled();
+	});
+
+	it("posts to Slack when the agent produces a real reply", async () => {
+		const adapter = new SlackChatAdapter(createStaticProvider([]));
+		const postSpy = vi
+			.spyOn(SlackMessageService.prototype, "postMessage")
+			.mockResolvedValue({} as any);
+
+		await adapter.postReply(
+			slackEvent("Cyrus, what does this function do?"),
+			runnerWithReply("It memoizes the result."),
+		);
+
+		expect(postSpy).toHaveBeenCalledTimes(1);
+		expect(postSpy.mock.calls[0]?.[0]).toMatchObject({
+			channel: "C1",
+			text: "It memoizes the result.",
+			thread_ts: "1700000000.000100",
+		});
 	});
 });
 
