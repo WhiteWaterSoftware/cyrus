@@ -55,6 +55,7 @@ export type {
 	SandboxSettings,
 	SDKAssistantMessage,
 	SDKMessage,
+	SDKMirrorErrorMessage,
 	SDKRateLimitEvent,
 	SDKResultMessage,
 	SDKStatusMessage,

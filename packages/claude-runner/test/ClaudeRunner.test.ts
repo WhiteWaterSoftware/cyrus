@@ -834,6 +834,48 @@ describe("ClaudeRunner", () => {
 			expect(messageHandler).toHaveBeenCalledWith(mockMessages[1]); // assistant
 		});
 
+		it("should emit session-store-mirror-error on mirror_error system message", async () => {
+			// CYPACK-1267: the SDK emits a `mirror_error` system message when a
+			// SessionStore.append() batch is dropped. Cyrus must surface it so
+			// lost-context-on-resume is no longer silent.
+			const mirrorErrorMessage = {
+				type: "system",
+				subtype: "mirror_error",
+				error: "HttpSessionStore /api/sessions/append 503: backend down",
+				key: {
+					projectKey: "proj-key",
+					sessionId: "dropped-session",
+					subpath: undefined,
+				},
+				uuid: "mirror-uuid",
+				session_id: "test-session",
+			} as any;
+
+			const mockMessages: SDKMessage[] = [
+				{
+					type: "system",
+					subtype: "init",
+					tools: ["Read"],
+					session_id: "test-session",
+				} as any,
+				mirrorErrorMessage,
+			];
+
+			mockQuery.mockImplementation(async function* () {
+				for (const message of mockMessages) {
+					yield message;
+				}
+			});
+
+			const mirrorErrorHandler = vi.fn();
+			runner.on("session-store-mirror-error", mirrorErrorHandler);
+
+			await runner.start("test");
+
+			expect(mirrorErrorHandler).toHaveBeenCalledTimes(1);
+			expect(mirrorErrorHandler).toHaveBeenCalledWith(mirrorErrorMessage);
+		});
+
 		it("should filter TaskCreate tool calls from readable log", async () => {
 			const mockMessages: SDKMessage[] = [
 				// Assistant message with TaskCreate and Read tools

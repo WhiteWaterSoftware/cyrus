@@ -7,6 +7,7 @@ import type {
 	SandboxSettings,
 	SDKAssistantMessage,
 	SDKMessage,
+	SDKMirrorErrorMessage,
 	SDKResultMessage,
 	SDKSystemMessage,
 	SDKUserMessage,
@@ -118,6 +119,12 @@ export interface ClaudeRunnerEvents {
 	"end-turn": (lastText: string) => void;
 	error: (error: Error) => void | Promise<void>;
 	complete: (messages: SDKMessage[]) => void | Promise<void>;
+	/**
+	 * Emitted when the SDK reports a SessionStore mirror failure (a transcript
+	 * batch was dropped after bounded retry). Consumers can surface store data
+	 * loss instead of silently losing conversation context on resume.
+	 */
+	"session-store-mirror-error": (message: SDKMirrorErrorMessage) => void;
 }
 
 // Re-export SDK types for convenience
@@ -128,6 +135,7 @@ export type {
 	SandboxSettings,
 	SDKAssistantMessage,
 	SDKMessage,
+	SDKMirrorErrorMessage,
 	SDKRateLimitEvent,
 	SDKResultMessage,
 	SDKStatusMessage,

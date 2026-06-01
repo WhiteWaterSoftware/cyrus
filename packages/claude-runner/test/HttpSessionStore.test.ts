@@ -269,6 +269,86 @@ describe("HttpSessionStore - transport", () => {
 		expect(await store.load({ projectKey: "p", sessionId: "nope" })).toBeNull();
 	});
 
+	// CYPACK-1267: append/load emit structured events so dropped transcript
+	// batches can be correlated with slow or failing appends in production.
+	const makeRecordingLogger = (
+		events: Array<{ name: string; attrs?: Record<string, unknown> }>,
+	) =>
+		({
+			debug: () => {},
+			info: () => {},
+			warn: () => {},
+			error: () => {},
+			event: (name: string, attrs?: Record<string, unknown>) =>
+				events.push({ name, attrs }),
+			withContext() {
+				return this;
+			},
+			getLevel: () => 0,
+			setLevel: () => {},
+		}) as never;
+
+	test("logs append/load lifecycle events for store-data-loss diagnosis", async () => {
+		const events: Array<{ name: string; attrs?: Record<string, unknown> }> = [];
+		const store = new HttpSessionStore({
+			baseUrl: "http://fake.invalid",
+			apiKey: "k",
+			teamId: "team-1",
+			logger: makeRecordingLogger(events),
+			fetch: (async (input: unknown) => {
+				const url = typeof input === "string" ? input : String(input);
+				if (url.endsWith("/api/sessions/load")) {
+					return new Response(JSON.stringify({ entries: [{ type: "user" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				return new Response("{}", { status: 200 });
+			}) as unknown as typeof fetch,
+		});
+
+		await store.append({ projectKey: "p", sessionId: "s" }, [{ type: "user" }]);
+		await store.load({ projectKey: "p", sessionId: "s" });
+
+		const names = events.map((e) => e.name);
+		expect(names).toContain("session_store_append_started");
+		expect(names).toContain("session_store_append_succeeded");
+		expect(names).toContain("session_store_load_succeeded");
+
+		const appendStarted = events.find(
+			(e) => e.name === "session_store_append_started",
+		);
+		expect(appendStarted?.attrs?.entryCount).toBe(1);
+
+		const loadOk = events.find(
+			(e) => e.name === "session_store_load_succeeded",
+		);
+		expect(loadOk?.attrs?.entryCount).toBe(1);
+		expect(typeof loadOk?.attrs?.durationMs).toBe("number");
+	});
+
+	test("logs append failure event when the backend rejects", async () => {
+		const events: Array<{ name: string; attrs?: Record<string, unknown> }> = [];
+		const store = new HttpSessionStore({
+			baseUrl: "http://fake.invalid",
+			apiKey: "k",
+			teamId: "team-1",
+			logger: makeRecordingLogger(events),
+			fetch: (async () =>
+				new Response("backend down", {
+					status: 503,
+				})) as unknown as typeof fetch,
+		});
+
+		await expect(
+			store.append({ projectKey: "p", sessionId: "s" }, [{ type: "user" }]),
+		).rejects.toThrow(/503/);
+
+		const failed = events.find((e) => e.name === "session_store_append_failed");
+		expect(failed).toBeDefined();
+		expect(String(failed?.attrs?.error)).toMatch(/503/);
+	});
+
 	test("surfaces non-2xx responses as errors", async () => {
 		const store = new HttpSessionStore({
 			baseUrl: "http://fake.invalid",

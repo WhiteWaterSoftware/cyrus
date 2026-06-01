@@ -96,27 +96,78 @@ export class HttpSessionStore implements SessionStore {
 
 	async append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void> {
 		if (entries.length === 0) return;
-		await this.post("/api/sessions/append", {
+		// CYPACK-1267: appends are best-effort in the SDK — a failure here (after
+		// the SDK's bounded retry) drops the batch and surfaces only as a
+		// `mirror_error` message in the query iterator. Log every append outcome
+		// with timing so we can see whether store data loss correlates with slow
+		// or failing appends to the hosted backend.
+		const startedAt = this.now();
+		this.logger?.event?.("session_store_append_started", {
 			projectKey: key.projectKey,
 			sessionId: key.sessionId,
-			...(key.subpath !== undefined && { subpath: key.subpath }),
-			entries,
+			subpath: key.subpath,
+			entryCount: entries.length,
 		});
-	}
-
-	async load(key: SessionKey): Promise<SessionStoreEntry[] | null> {
-		const res = await this.post<{ entries: SessionStoreEntry[] | null }>(
-			"/api/sessions/load",
-			{
+		try {
+			await this.post("/api/sessions/append", {
 				projectKey: key.projectKey,
 				sessionId: key.sessionId,
 				...(key.subpath !== undefined && { subpath: key.subpath }),
-			},
-		);
-		// Server returns `entries: null` when no transcript exists. Preserve that
-		// distinction — returning `[]` would look like an empty-but-present
-		// session, which the SDK treats differently from "no session found".
-		return res.entries ?? null;
+				entries,
+			});
+			this.logger?.event?.("session_store_append_succeeded", {
+				projectKey: key.projectKey,
+				sessionId: key.sessionId,
+				subpath: key.subpath,
+				entryCount: entries.length,
+				durationMs: this.elapsedMs(startedAt),
+			});
+		} catch (error) {
+			this.logger?.event?.("session_store_append_failed", {
+				projectKey: key.projectKey,
+				sessionId: key.sessionId,
+				subpath: key.subpath,
+				entryCount: entries.length,
+				durationMs: this.elapsedMs(startedAt),
+				error: error instanceof Error ? error.message : String(error),
+			});
+			throw error;
+		}
+	}
+
+	async load(key: SessionKey): Promise<SessionStoreEntry[] | null> {
+		const startedAt = this.now();
+		try {
+			const res = await this.post<{ entries: SessionStoreEntry[] | null }>(
+				"/api/sessions/load",
+				{
+					projectKey: key.projectKey,
+					sessionId: key.sessionId,
+					...(key.subpath !== undefined && { subpath: key.subpath }),
+				},
+			);
+			// Server returns `entries: null` when no transcript exists. Preserve that
+			// distinction — returning `[]` would look like an empty-but-present
+			// session, which the SDK treats differently from "no session found".
+			const entries = res.entries ?? null;
+			this.logger?.event?.("session_store_load_succeeded", {
+				projectKey: key.projectKey,
+				sessionId: key.sessionId,
+				subpath: key.subpath,
+				entryCount: entries?.length ?? null,
+				durationMs: this.elapsedMs(startedAt),
+			});
+			return entries;
+		} catch (error) {
+			this.logger?.event?.("session_store_load_failed", {
+				projectKey: key.projectKey,
+				sessionId: key.sessionId,
+				subpath: key.subpath,
+				durationMs: this.elapsedMs(startedAt),
+				error: error instanceof Error ? error.message : String(error),
+			});
+			throw error;
+		}
 	}
 
 	async listSessions(
@@ -161,6 +212,16 @@ export class HttpSessionStore implements SessionStore {
 			Authorization: `Bearer ${this.apiKey}`,
 			[CYRUS_TEAM_ID_HEADER]: this.teamId,
 		};
+	}
+
+	/** Monotonic-ish start timestamp for request timing. */
+	private now(): number {
+		return Date.now();
+	}
+
+	/** Elapsed milliseconds since a `now()` timestamp. */
+	private elapsedMs(startedAt: number): number {
+		return Date.now() - startedAt;
 	}
 
 	private async post<T = unknown>(path: string, body: JsonBody): Promise<T> {

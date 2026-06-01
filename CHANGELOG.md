@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Cyrus now logs a clear warning when a session transcript fails to save to the hosted session store. Previously these failures were silent, and a dropped batch could cause an agent to lose earlier conversation context when a later session resumed — appearing to "forget" what it had just said. Session-store saves and loads are now logged with timing and outcome so this class of context loss is diagnosable. ([CYPACK-1267](https://linear.app/ceedar/issue/CYPACK-1267))
+
 ## [0.2.61] - 2026-06-01
 
 ### Security

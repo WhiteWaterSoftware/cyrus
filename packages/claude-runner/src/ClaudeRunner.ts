@@ -14,6 +14,7 @@ import {
 	type Query,
 	query,
 	type SDKMessage,
+	type SDKMirrorErrorMessage,
 	type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { AskUserQuestionInput } from "cyrus-core";
@@ -1075,7 +1076,25 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 				break;
 
 			case "system":
-				// System messages are for initialization
+				// CYPACK-1267: The SDK emits a `mirror_error` system message when a
+				// SessionStore.append()/load() batch fails after its bounded retry.
+				// The batch is then dropped — the only signal of store data loss.
+				// Surface it loudly (structured event + emitted event) so context
+				// loss across resumed sessions is no longer silent.
+				if ((message as { subtype?: string }).subtype === "mirror_error") {
+					const mirrorError = message as SDKMirrorErrorMessage;
+					this.logger.error(
+						`Session store mirror_error — transcript batch dropped: ${mirrorError.error}`,
+					);
+					this.logger.event("session_store_mirror_error", {
+						error: mirrorError.error,
+						projectKey: mirrorError.key?.projectKey,
+						mirrorSessionId: mirrorError.key?.sessionId,
+						subpath: mirrorError.key?.subpath,
+						claudeSessionId: this.sessionInfo?.sessionId,
+					});
+					this.emit("session-store-mirror-error", mirrorError);
+				}
 				break;
 
 			case "rate_limit_event":
@@ -1298,7 +1317,23 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 					}
 					break;
 
-				// Skip system messages, they're too noisy for readable log
+				case "system":
+					// Most system messages are too noisy for the readable log, but a
+					// `mirror_error` means a transcript batch was dropped — that is the
+					// signal we need when diagnosing lost context on resume (CYPACK-1267).
+					if ((message as { subtype?: string }).subtype === "mirror_error") {
+						const mirrorError = message as SDKMirrorErrorMessage;
+						this.readableLogStream.write(
+							`## ${timestamp} - ⚠️ Session Store Mirror Error\n\n` +
+								`**Transcript batch dropped — context may be lost on resume.**\n\n` +
+								`- **error**: ${mirrorError.error}\n` +
+								`- **sessionId**: ${mirrorError.key?.sessionId}\n` +
+								`- **subpath**: ${mirrorError.key?.subpath ?? "(main transcript)"}\n\n`,
+						);
+					}
+					break;
+
+				// Skip remaining message types, they're too noisy for readable log
 				default:
 					break;
 			}

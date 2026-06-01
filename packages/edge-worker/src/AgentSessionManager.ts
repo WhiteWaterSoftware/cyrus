@@ -4,6 +4,7 @@ import type {
 	APIUserMessage,
 	SDKAssistantMessage,
 	SDKMessage,
+	SDKMirrorErrorMessage,
 	SDKRateLimitEvent,
 	SDKResultMessage,
 	SDKStatusMessage,
@@ -494,6 +495,23 @@ export class AgentSessionManager extends EventEmitter {
 							sessionId,
 							message as SDKStatusMessage,
 						);
+					} else if (message.subtype === "mirror_error") {
+						// CYPACK-1267: the SDK dropped a transcript batch when the
+						// SessionStore append failed. This is the root signal for the
+						// "agent forgot what it just said" class of bug — earlier turns
+						// never reached the store, so a later resume loads stale history.
+						// Log it loudly at the session level so it is visible alongside
+						// the session timeline, not just in the runner's raw logs.
+						const mirrorError = message as SDKMirrorErrorMessage;
+						log.error(
+							`Session store mirror_error — transcript batch dropped, context may be lost on resume: ${mirrorError.error}`,
+						);
+						log.event("session_store_mirror_error", {
+							error: mirrorError.error,
+							projectKey: mirrorError.key?.projectKey,
+							mirrorSessionId: mirrorError.key?.sessionId,
+							subpath: mirrorError.key?.subpath,
+						});
 					}
 					break;
 
@@ -1418,7 +1436,7 @@ export class AgentSessionManager extends EventEmitter {
 		const log = this.sessionLog(sessionId);
 		const session = this.sessions.get(sessionId);
 
-		if (!session || !session.externalSessionId) {
+		if (!session?.externalSessionId) {
 			log.debug(
 				`Skipping ${label} - no external session ID (platform: ${session?.issueContext?.trackerId || "unknown"})`,
 			);
@@ -1681,7 +1699,7 @@ export class AgentSessionManager extends EventEmitter {
 		message: SDKStatusMessage,
 	): Promise<void> {
 		const session = this.sessions.get(sessionId);
-		if (!session || !session.externalSessionId) {
+		if (!session?.externalSessionId) {
 			const log = this.sessionLog(sessionId);
 			log.debug(
 				`Skipping status message - no external session ID (platform: ${session?.issueContext?.trackerId || "unknown"})`,
