@@ -132,6 +132,8 @@ describe("SlackEventTransport", () => {
 					eventType: "app_mention",
 					eventId: "Ev0001",
 					teamId: "T0001",
+					// Proxy mode: CYHOST already gated this event upstream.
+					upstreamGated: true,
 				}),
 			);
 		});
@@ -571,6 +573,8 @@ describe("SlackEventTransport", () => {
 					eventType: "app_mention",
 					eventId: "Ev0001",
 					teamId: "T0001",
+					// Direct mode: no upstream gate, runtime must self-gate.
+					upstreamGated: false,
 				}),
 			);
 		});

@@ -50,6 +50,16 @@ export interface SlackWebhookEvent {
 	slackBotToken?: string;
 	/** Workspace/team ID */
 	teamId: string;
+	/**
+	 * True when the event arrived via an upstream gate that already verified it
+	 * should be acted on (proxy mode: CYHOST only forwards `message` events for
+	 * threads it has a persistent binding row for). When true, a plain `message`
+	 * event is trusted to (re)start a session for its thread even if the runtime
+	 * has no in-memory binding — e.g. after a process restart. In direct mode
+	 * (Slack → runtime, no upstream gate) this is false and the runtime must
+	 * self-gate on its in-memory thread bindings.
+	 */
+	upstreamGated?: boolean;
 }
 
 /**

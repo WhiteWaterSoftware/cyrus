@@ -195,7 +195,10 @@ export class SlackEventTransport extends EventEmitter {
 				return;
 			}
 
-			this.processAndEmitEvent(request, reply);
+			// Direct mode: Slack delivers events straight to us with no upstream
+			// gate, so the runtime must self-gate plain messages on its in-memory
+			// thread bindings.
+			this.processAndEmitEvent(request, reply, false);
 		} catch (error) {
 			const err = new Error("Slack signature verification failed");
 			if (error instanceof Error) {
@@ -252,7 +255,10 @@ export class SlackEventTransport extends EventEmitter {
 		}
 
 		try {
-			this.processAndEmitEvent(request, reply);
+			// Proxy mode: CYHOST already verified this event against its
+			// persistent thread bindings before forwarding, so a `message` event
+			// reaching us is trusted to (re)start a session for its thread.
+			this.processAndEmitEvent(request, reply, true);
 		} catch (error) {
 			const err = new Error("Proxy webhook processing failed");
 			if (error instanceof Error) {
@@ -269,6 +275,7 @@ export class SlackEventTransport extends EventEmitter {
 	private processAndEmitEvent(
 		request: FastifyRequest,
 		reply: FastifyReply,
+		upstreamGated: boolean,
 	): void {
 		const envelope = request.body as SlackEventEnvelope;
 
@@ -332,6 +339,7 @@ export class SlackEventTransport extends EventEmitter {
 			payload: event,
 			slackBotToken,
 			teamId: envelope.team_id,
+			upstreamGated,
 		};
 
 		this.logger.info(

@@ -87,13 +87,21 @@ export class SlackChatAdapter
 	}
 
 	/**
-	 * Only an explicit @mention may start a new session. Plain `message` events
-	 * are follow-ups: they continue a thread Cyrus is already bound to, but
-	 * never spin up a session on their own (otherwise every message in a watched
-	 * channel would start one).
+	 * Decide whether an event may start a session when the runtime has no
+	 * in-memory binding for its thread.
+	 *
+	 * - An explicit @mention always may.
+	 * - A plain `message` event may only when it was upstream-gated (proxy mode):
+	 *   CYHOST forwards `message` events solely for threads it has a persistent
+	 *   binding row for, so reaching us means the thread is genuinely bound. This
+	 *   is what lets Cyrus keep answering follow-ups after a process restart wipes
+	 *   the in-memory binding — the prior Slack thread is rehydrated via
+	 *   `fetchThreadContext`. In direct mode (`upstreamGated` false) there is no
+	 *   such guarantee, so an unbound plain message is ignored to avoid starting a
+	 *   session for arbitrary channel chatter.
 	 */
 	isSessionInitiatingEvent(event: SlackWebhookEvent): boolean {
-		return event.eventType === "app_mention";
+		return event.eventType === "app_mention" || event.upstreamGated === true;
 	}
 
 	getThreadKey(event: SlackWebhookEvent): string {

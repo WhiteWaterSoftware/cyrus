@@ -216,14 +216,31 @@ describe("ChatSessionHandler session-initiation gate", () => {
 });
 
 describe("SlackChatAdapter session initiation", () => {
-	it("treats app_mention as session-initiating and message as a follow-up", () => {
+	it("treats app_mention as session-initiating", () => {
 		const adapter = new SlackChatAdapter(createStaticProvider([]));
 		expect(
 			adapter.isSessionInitiatingEvent({ eventType: "app_mention" } as any),
 		).toBe(true);
+	});
+
+	it("ignores a non-upstream-gated message (direct mode, unbound thread)", () => {
+		const adapter = new SlackChatAdapter(createStaticProvider([]));
 		expect(
-			adapter.isSessionInitiatingEvent({ eventType: "message" } as any),
+			adapter.isSessionInitiatingEvent({
+				eventType: "message",
+				upstreamGated: false,
+			} as any),
 		).toBe(false);
+	});
+
+	it("treats an upstream-gated message as session-initiating (proxy mode survives restart)", () => {
+		const adapter = new SlackChatAdapter(createStaticProvider([]));
+		expect(
+			adapter.isSessionInitiatingEvent({
+				eventType: "message",
+				upstreamGated: true,
+			} as any),
+		).toBe(true);
 	});
 });
 
