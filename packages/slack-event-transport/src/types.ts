@@ -22,6 +22,14 @@ export interface SlackEventTransportConfig {
 	verificationMode: SlackVerificationMode;
 	/** Secret for verification (CYRUS_API_KEY for proxy, SLACK_SIGNING_SECRET for direct) */
 	secret: string;
+	/**
+	 * Live predicate for whether Cyrus should follow plain (non-@mention)
+	 * messages in a thread. When it returns false, `message` events are ignored
+	 * entirely (app_mention-only behaviour) — they're dropped before the
+	 * app_mention/message de-dup so a mention's `message` twin never suppresses
+	 * its `app_mention`. Omitted ⇒ always enabled.
+	 */
+	isThreadFollowingEnabled?: () => boolean;
 }
 
 /**

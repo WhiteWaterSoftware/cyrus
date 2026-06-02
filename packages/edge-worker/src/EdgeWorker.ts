@@ -1031,6 +1031,24 @@ export class EdgeWorker extends EventEmitter {
 	}
 
 	/**
+	 * Whether Cyrus should follow plain replies in a Slack thread it was
+	 * @mentioned in. Enabled by default; controlled by the per-team
+	 * `slackThreadFollowing` config toggle (Behaviours page) and force-disabled
+	 * by the `CYRUS_SLACK_THREAD_FOLLOWING_DISABLED` env kill-switch, which takes
+	 * precedence over the toggle. When disabled, only @mentions are processed.
+	 */
+	private isSlackThreadFollowingEnabled(): boolean {
+		const envValue = (process.env.CYRUS_SLACK_THREAD_FOLLOWING_DISABLED ?? "")
+			.toLowerCase()
+			.trim();
+		if (envValue === "true" || envValue === "1" || envValue === "yes") {
+			return false;
+		}
+		// Config toggle defaults to enabled when unset.
+		return this.config.slackThreadFollowing !== false;
+	}
+
+	/**
 	 * Register the Slack event transport for receiving forwarded Slack webhooks from CYHOST.
 	 * This creates a /slack-webhook endpoint that handles @mention events from Slack.
 	 */
@@ -1108,6 +1126,9 @@ export class EdgeWorker extends EventEmitter {
 			fastifyServer: this.sharedApplicationServer.getFastifyInstance(),
 			verificationMode: slackVerificationMode,
 			secret: slackSecret,
+			// Live read so the per-team toggle (hot-reloaded via config) and the
+			// env kill-switch both take effect without rebuilding the transport.
+			isThreadFollowingEnabled: () => this.isSlackThreadFollowingEnabled(),
 		});
 
 		this.slackEventTransport.on("event", (event: SlackWebhookEvent) => {

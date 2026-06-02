@@ -305,6 +305,23 @@ export class SlackEventTransport extends EventEmitter {
 			return;
 		}
 
+		// Thread-following can be disabled (per-team toggle pushed via config, or
+		// the CYRUS_SLACK_THREAD_FOLLOWING_DISABLED env kill-switch). When off,
+		// behave exactly like the app_mention-only runtime: drop `message` events
+		// here — BEFORE the de-dup below records their (channel, ts) — so a
+		// mention's `message` twin can never suppress its `app_mention`.
+		if (
+			event.type === "message" &&
+			this.config.isThreadFollowingEnabled &&
+			!this.config.isThreadFollowingEnabled()
+		) {
+			this.logger.debug(
+				`Slack thread-following disabled; ignoring message event (channel ${event.channel})`,
+			);
+			reply.code(200).send({ success: true, ignored: true });
+			return;
+		}
+
 		// `message` events fire for every message in every channel the bot can
 		// see, so apply cheap structural filters before doing any work. Anything
 		// that gets through here is a candidate follow-up prompt; the binding

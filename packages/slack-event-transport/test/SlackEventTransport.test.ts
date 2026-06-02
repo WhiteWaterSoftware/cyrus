@@ -436,6 +436,74 @@ describe("SlackEventTransport", () => {
 			expect(eventListener).not.toHaveBeenCalled();
 		});
 
+		it("ignores message events when thread-following is disabled", async () => {
+			const disabledTransport = new SlackEventTransport({
+				fastifyServer:
+					mockFastify as unknown as SlackEventTransportConfig["fastifyServer"],
+				verificationMode: "proxy",
+				secret: testSecret,
+				isThreadFollowingEnabled: () => false,
+			});
+			disabledTransport.register();
+			const eventListener = vi.fn();
+			disabledTransport.on("event", eventListener);
+
+			const request = createMockRequest(testThreadedMessageEnvelope, {
+				authorization: `Bearer ${testSecret}`,
+			});
+			const reply = createMockReply();
+
+			await mockFastify.routes["/slack-webhook"]!(request, reply);
+
+			expect(reply.send).toHaveBeenCalledWith({
+				success: true,
+				ignored: true,
+			});
+			expect(eventListener).not.toHaveBeenCalled();
+		});
+
+		it("still processes app_mention when thread-following is disabled, even after the message twin", async () => {
+			const disabledTransport = new SlackEventTransport({
+				fastifyServer:
+					mockFastify as unknown as SlackEventTransportConfig["fastifyServer"],
+				verificationMode: "proxy",
+				secret: testSecret,
+				isThreadFollowingEnabled: () => false,
+			});
+			disabledTransport.register();
+			const eventListener = vi.fn();
+			disabledTransport.on("event", eventListener);
+			const handler = mockFastify.routes["/slack-webhook"]!;
+
+			// The message twin of an @mention arrives first (same channel:ts).
+			const messageTwin = {
+				...testThreadedMessageEnvelope,
+				event: {
+					...testThreadedMessageEnvelope.event,
+					ts: "1704110500.000200",
+				},
+			};
+			await handler(
+				createMockRequest(messageTwin, {
+					authorization: `Bearer ${testSecret}`,
+				}),
+				createMockReply(),
+			);
+			// Dropped without poisoning the de-dup, so the app_mention still emits.
+			expect(eventListener).not.toHaveBeenCalled();
+
+			await handler(
+				createMockRequest(testThreadedEventEnvelope, {
+					authorization: `Bearer ${testSecret}`,
+				}),
+				createMockReply(),
+			);
+			expect(eventListener).toHaveBeenCalledTimes(1);
+			expect(eventListener).toHaveBeenCalledWith(
+				expect.objectContaining({ eventType: "app_mention" }),
+			);
+		});
+
 		it("de-duplicates app_mention + message delivery for the same message", async () => {
 			const eventListener = vi.fn();
 			transport.on("event", eventListener);
