@@ -5,8 +5,57 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [0.2.62] - 2026-06-02
+
 ### Added
 - On Cyrus-managed cloud runtimes, the agent now knows that missing system packages should be added via the dashboard: when the `CYRUS_CLOUD_RUNTIME` environment variable is set to `true`, a system-prompt addendum tells the agent to direct users to https://app.atcyrus.com/settings/packages to install missing `apt`/`npm` packages rather than installing them ad-hoc (off by default for self-host). ([CYPACK-1266](https://linear.app/ceedar/issue/CYPACK-1266), [#1272](https://github.com/cyrusagents/cyrus/pull/1272))
+
+### Packages
+
+#### cyrus-cloudflare-tunnel-client
+- cyrus-cloudflare-tunnel-client@0.2.62
+
+#### cyrus-mcp-tools
+- cyrus-mcp-tools@0.2.62
+
+#### cyrus-claude-runner
+- cyrus-claude-runner@0.2.62
+
+#### cyrus-core
+- cyrus-core@0.2.62
+
+#### cyrus-simple-agent-runner
+- cyrus-simple-agent-runner@0.2.62
+
+#### cyrus-codex-runner
+- cyrus-codex-runner@0.2.62
+
+#### cyrus-cursor-runner
+- cyrus-cursor-runner@0.2.62
+
+#### cyrus-config-updater
+- cyrus-config-updater@0.2.62
+
+#### cyrus-linear-event-transport
+- cyrus-linear-event-transport@0.2.62
+
+#### cyrus-github-event-transport
+- cyrus-github-event-transport@0.2.62
+
+#### cyrus-gitlab-event-transport
+- cyrus-gitlab-event-transport@0.2.62
+
+#### cyrus-slack-event-transport
+- cyrus-slack-event-transport@0.2.62
+
+#### cyrus-gemini-runner
+- cyrus-gemini-runner@0.2.62
+
+#### cyrus-edge-worker
+- cyrus-edge-worker@0.2.62
+
+#### cyrus-ai (CLI)
+- cyrus-ai@0.2.62
 
 ## [0.2.61] - 2026-06-01
 
