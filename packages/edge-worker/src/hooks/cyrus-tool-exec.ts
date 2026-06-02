@@ -1,15 +1,15 @@
 /**
  * Single source of truth for the `cyrus-tool-exec` wrapper CLI contract.
  *
- * The wrapper is installed on cloud droplet images (cyrus-images Section A). It
- * runs an inner command inside an ephemeral cgroup v2 with a `memory.max`
- * budget and, on OOM, prints {@link OOM_MARKER} to stderr. Two EdgeWorker hooks
- * depend on this contract from opposite ends:
+ * `cyrus-tool-exec` is a small wrapper binary baked into the Cyrus managed-cloud
+ * droplet image. It runs an inner command inside an ephemeral cgroup v2 with a
+ * `memory.max` budget and, on OOM, prints {@link OOM_MARKER} to stderr. Two
+ * EdgeWorker hooks depend on this contract from opposite ends:
  *   - {@link buildMemoryLimitHook} (PreToolUse) *wraps* a command via
  *     {@link wrapCommand}.
  *   - the OOM report hook (PostToolUse) *detects* {@link OOM_MARKER}, parses it
- *     via {@link parseOomMarker}, and *unwraps* the command via
- *     {@link unwrapCommand} to recover a clean excerpt.
+ *     via {@link parseOomMarker}, and derives a privacy-safe program label via
+ *     {@link extractProgramName}.
  *
  * Keeping the wrapped-command format, env-var name, binary path and marker in
  * one place means the producing and consuming hooks can never drift apart.
@@ -61,11 +61,13 @@ export function wrapCommand(command: string, capMb: string): string {
 }
 
 /**
- * Best-effort reverse of {@link wrapCommand}: recover the user's original
- * command from a wrapped one. Returns the input unchanged when it doesn't carry
- * the wrapper prefix.
+ * Strip the {@link wrapCommand} prefix, returning the inner command the user
+ * actually asked to run (input unchanged when it isn't wrapped). Internal — at
+ * PostToolUse time the command has already been rewritten to
+ * `<env> cyrus-tool-exec '<original>'`, so we must peel the wrapper off to see
+ * the real command instead of our own boilerplate.
  */
-export function unwrapCommand(command: string): string {
+function unwrapCommand(command: string): string {
 	if (!WRAPPER_PREFIX_RE.test(command)) {
 		return command;
 	}
@@ -74,6 +76,34 @@ export function unwrapCommand(command: string): string {
 		return quoted.slice(1, -1).replace(/'\\''/g, "'");
 	}
 	return quoted;
+}
+
+/** Leading `VAR=value` env-assignment token, e.g. the `FOO=bar` in `FOO=bar cmd`. */
+const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/**
+ * Derive a privacy-safe label for a (possibly wrapped) command: the basename of
+ * the program being executed, with **no arguments and no leading `VAR=value`
+ * env assignments**. This is deliberately conservative for telemetry leaving the
+ * box (SOC-2): command arguments and inline env assignments are exactly where
+ * secrets live — API tokens, connection strings, `KEY=...` prefixes — so we
+ * never ship them off the droplet. We send only *what* ran, not *how* it ran.
+ *
+ *   `pnpm test --token=abc`                          -> `pnpm`
+ *   `AWS_SECRET_ACCESS_KEY=… node build.js`          -> `node`
+ *   `<env> cyrus-tool-exec 'SECRET=x ./bin/run -k y'`-> `run`
+ *
+ * Returns "" when no program token can be identified.
+ */
+export function extractProgramName(command: string, max = 64): string {
+	const inner = unwrapCommand(command);
+	const firstLine = inner.split("\n", 1)[0] ?? "";
+	const tokens = firstLine.trim().split(/\s+/).filter(Boolean);
+	// Skip leading `VAR=value` env assignments; the first remaining token is the
+	// program being run.
+	const program = tokens.find((token) => !ENV_ASSIGNMENT_RE.test(token)) ?? "";
+	const basename = program.split("/").pop() ?? program;
+	return basename.slice(0, max);
 }
 
 /** Numbers parsed from an {@link OOM_MARKER} line; every field is best-effort. */

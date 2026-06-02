@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+	extractProgramName,
 	OOM_MARKER,
 	parseOomMarker,
 	singleQuote,
-	unwrapCommand,
 	wrapCommand,
 } from "../src/hooks/cyrus-tool-exec.js";
 
@@ -49,18 +49,44 @@ describe("wrapCommand", () => {
 	});
 });
 
-describe("unwrapCommand", () => {
-	it("returns a plain command unchanged", () => {
-		expect(unwrapCommand("pnpm test")).toBe("pnpm test");
+describe("extractProgramName", () => {
+	it("returns the program name from a plain command", () => {
+		expect(extractProgramName("pnpm test --filter x")).toBe("pnpm");
 	});
 
-	it("is the inverse of wrapCommand for simple commands", () => {
-		expect(unwrapCommand(wrapCommand("pnpm test", "1300"))).toBe("pnpm test");
+	it("peels the wrapper prefix and returns the inner program", () => {
+		expect(extractProgramName(wrapCommand("pnpm test", "1300"))).toBe("pnpm");
 	});
 
-	it("is the inverse of wrapCommand for commands with single quotes", () => {
-		const cmd = "echo 'hello world'";
-		expect(unwrapCommand(wrapCommand(cmd, "3000"))).toBe(cmd);
+	it("drops leading VAR=value env assignments (where secrets live)", () => {
+		expect(extractProgramName("AWS_SECRET_ACCESS_KEY=shh node build.js")).toBe(
+			"node",
+		);
+	});
+
+	it("drops arguments entirely (no secret-bearing flags)", () => {
+		expect(
+			extractProgramName("curl -H 'Authorization: Bearer sk-123' url"),
+		).toBe("curl");
+	});
+
+	it("returns the basename of a path-qualified program", () => {
+		expect(extractProgramName("SECRET=x ./bin/run -k yyy")).toBe("run");
+		expect(extractProgramName("/usr/bin/python3 main.py")).toBe("python3");
+	});
+
+	it("handles a wrapped command whose inner command carries secrets", () => {
+		const inner = "TOKEN=supersecret ./deploy.sh --key abc";
+		expect(extractProgramName(wrapCommand(inner, "1300"))).toBe("deploy.sh");
+	});
+
+	it("uses the first line for heredocs", () => {
+		expect(extractProgramName("cat <<'EOF'\nsecret-data\nEOF")).toBe("cat");
+	});
+
+	it("returns empty string when there is no program token", () => {
+		expect(extractProgramName("")).toBe("");
+		expect(extractProgramName("FOO=bar")).toBe("");
 	});
 });
 

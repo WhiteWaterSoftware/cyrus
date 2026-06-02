@@ -13,17 +13,16 @@ import {
 } from "./cyrus-tool-exec.js";
 
 /**
- * Env var gating the whole cloud-runtime feature. cyrus-hosted sets this to a
- * truthy value on cloud-runtime droplets and leaves it unset for self-host.
- * Kept identical to the `CYRUS_CLOUD_RUNTIME` gate used by the cloud-runtime
- * system-prompt addendum (CYPACK-1266) so both features share one signal.
+ * Env var gating the cloud per-Bash memory feature. cyrus-hosted sets it to a
+ * truthy value on managed-cloud droplets and leaves it unset everywhere else,
+ * so the gate is a no-op on self-host and community installs.
  */
 const CLOUD_RUNTIME_ENV = "CYRUS_CLOUD_RUNTIME";
 
 /**
  * True when `CYRUS_CLOUD_RUNTIME` is set to a truthy value (`1` / `true` /
- * `yes`, case-insensitive). Matches the truthiness rule used elsewhere for this
- * same env var so the cloud gate behaves consistently across hooks.
+ * `yes`, case-insensitive). The same truthiness rule is used wherever this env
+ * var is read, so the cloud gate behaves consistently.
  */
 function isCloudRuntime(getEnv: (name: string) => string | undefined): boolean {
 	const raw = getEnv(CLOUD_RUNTIME_ENV);
@@ -32,11 +31,18 @@ function isCloudRuntime(getEnv: (name: string) => string | undefined): boolean {
 	return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
-/** Injectable seams for {@link buildMemoryLimitHook} (for testing). */
+/**
+ * Injected dependencies so the gate can be unit-tested deterministically
+ * without mutating the real `process.env` or touching the real filesystem.
+ * Production callers use `buildMemoryLimitHook(log)` and get the real
+ * `process.env` / `fs.existsSync` defaults; tests pass stubs (see
+ * `MemoryLimitHook.test.ts`). Same dependency-injection seam the sibling
+ * `IntentToAddHook` uses for its git client.
+ */
 export interface MemoryLimitHookDeps {
-	/** Reads an environment variable. Defaults to `process.env`. */
+	/** Reads an env var. Defaults to reading `process.env`. */
 	getEnv?: (name: string) => string | undefined;
-	/** Returns true when the cgroup wrapper binary exists. Defaults to `fs`. */
+	/** Whether the cgroup wrapper binary exists on disk. Defaults to `fs.existsSync`. */
 	wrapperExists?: () => boolean;
 }
 

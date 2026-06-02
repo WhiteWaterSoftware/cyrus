@@ -6,7 +6,6 @@ import type { ILogger } from "cyrus-core";
 import { describe, expect, it, vi } from "vitest";
 import { OOM_MARKER, wrapCommand } from "../src/hooks/cyrus-tool-exec.js";
 import {
-	buildCommandExcerpt,
 	buildOomReportHook,
 	extractResultText,
 	HttpOomEventReporter,
@@ -83,22 +82,6 @@ describe("extractResultText", () => {
 	});
 });
 
-describe("buildCommandExcerpt", () => {
-	it("returns a short prefix of a plain command", () => {
-		expect(buildCommandExcerpt("pnpm test")).toBe("pnpm test");
-	});
-
-	it("unwraps the wrapper prefix back to the original command", () => {
-		expect(buildCommandExcerpt(wrapCommand("echo 'hi'", "1300"))).toBe(
-			"echo 'hi'",
-		);
-	});
-
-	it("truncates to the max length", () => {
-		expect(buildCommandExcerpt("a".repeat(500), 200)).toHaveLength(200);
-	});
-});
-
 describe("buildOomReportHook", () => {
 	it("registers a Bash matcher under PostToolUse", () => {
 		const matcher = postMatcher(recordingReporter());
@@ -111,7 +94,7 @@ describe("buildOomReportHook", () => {
 		expect(reporter.events).toHaveLength(0);
 	});
 
-	it("reports a parsed event when the marker is present", async () => {
+	it("reports a parsed event with the program name only when the marker is present", async () => {
 		const reporter = recordingReporter();
 		await runPost(
 			postMatcher(reporter),
@@ -121,18 +104,19 @@ describe("buildOomReportHook", () => {
 			{
 				budgetMb: 1300,
 				peakBytes: 1500000000,
-				commandExcerpt: "pnpm run heavy",
+				commandExcerpt: "pnpm",
 			},
 		]);
 	});
 
-	it("unwraps the wrapper prefix from the command excerpt", async () => {
+	it("sends only the program name, never wrapper prefix or secret-bearing args", async () => {
 		const reporter = recordingReporter();
+		const wrapped = wrapCommand("TOKEN=shh ./deploy.sh --key abc", "1300");
 		await runPost(
 			postMatcher(reporter),
-			makePostInput({ stderr: MARKER_TEXT }, wrapCommand("echo 'hi'", "1300")),
+			makePostInput({ stderr: MARKER_TEXT }, wrapped),
 		);
-		expect(reporter.events[0].commandExcerpt).toBe("echo 'hi'");
+		expect(reporter.events[0].commandExcerpt).toBe("deploy.sh");
 	});
 
 	it("fails open (returns {}) when the reporter throws", async () => {

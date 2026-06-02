@@ -7,16 +7,20 @@ import type {
 import { getCyrusAppUrl } from "cyrus-cloudflare-tunnel-client";
 import type { ILogger } from "cyrus-core";
 import {
+	extractProgramName,
 	OOM_MARKER,
 	parseOomMarker,
-	unwrapCommand,
 } from "./cyrus-tool-exec.js";
 
 /** A per-command OOM event, ready to report to the control plane. */
 export interface OomEvent {
 	budgetMb?: number;
 	peakBytes?: number;
-	/** Short, secret-light prefix of the original command (server truncates to ≤200). */
+	/**
+	 * Privacy-safe identifier of the program that OOM'd — the executable name
+	 * only, never arguments or env assignments (see {@link extractProgramName}).
+	 * Carried in the control-plane wire field `commandExcerpt`.
+	 */
 	commandExcerpt: string;
 }
 
@@ -136,16 +140,6 @@ export function extractResultText(toolResponse: unknown): string {
 }
 
 /**
- * Build a short, secret-light excerpt of the original command. If the command
- * still carries the wrapper prefix the PreToolUse hook injected, unwrap it back
- * to the user's original first, then truncate (the server truncates to ≤200
- * chars too).
- */
-export function buildCommandExcerpt(command: string, max = 200): string {
-	return unwrapCommand(command).slice(0, max);
-}
-
-/**
  * Build the PostToolUse hook that reports per-command OOM kills to the
  * cyrus-hosted control plane. The hook's sole responsibility is to detect
  * {@link OOM_MARKER} in the Bash result, parse it, and hand a structured
@@ -176,7 +170,7 @@ export function buildOomReportHook(
 							await reporter.report({
 								budgetMb,
 								peakBytes,
-								commandExcerpt: buildCommandExcerpt(
+								commandExcerpt: extractProgramName(
 									typeof command === "string" ? command : "",
 								),
 							});
