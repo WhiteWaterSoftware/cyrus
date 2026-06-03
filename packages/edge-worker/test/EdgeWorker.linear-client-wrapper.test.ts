@@ -6,12 +6,14 @@ import { EdgeWorker } from "../src/EdgeWorker.js";
 // Mock modules
 vi.mock("@linear/sdk");
 vi.mock("../src/SharedApplicationServer.js", () => ({
-	SharedApplicationServer: vi.fn().mockImplementation(() => ({
-		start: vi.fn(),
-		registerLinearEventTransport: vi.fn(),
-		registerConfigUpdater: vi.fn(),
-		registerOAuthCallback: vi.fn(),
-	})),
+	SharedApplicationServer: vi.fn().mockImplementation(function () {
+		return {
+			start: vi.fn(),
+			registerLinearEventTransport: vi.fn(),
+			registerConfigUpdater: vi.fn(),
+			registerOAuthCallback: vi.fn(),
+		};
+	}),
 }));
 
 // Mock fs/promises for file operations
@@ -99,7 +101,9 @@ describe("EdgeWorker LinearClient Wrapper", () => {
 		};
 
 		// Mock LinearClient constructor
-		vi.mocked(LinearClient).mockImplementation(() => mockLinearClient);
+		vi.mocked(LinearClient).mockImplementation(function () {
+			return mockLinearClient;
+		});
 	});
 
 	describe("Auto-retry on 401 errors", () => {

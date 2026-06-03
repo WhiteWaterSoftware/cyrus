@@ -19,6 +19,18 @@
 			"test": "recommended"
 		}
 	},
+	"overrides": [
+		{
+			"includes": ["**/*.test.ts", "**/test/**/*.ts"],
+			"linter": {
+				"rules": {
+					"complexity": {
+						"useArrowFunction": "off"
+					}
+				}
+			}
+		}
+	],
 	"formatter": {
 		"formatWithErrors": true
 	},

@@ -600,6 +600,9 @@
 		"slackThreadFollowing": {
 			"type": "boolean"
 		},
+		"prReviewTrigger": {
+			"type": "boolean"
+		},
 		"userAccessControl": {
 			"type": "object",
 			"properties": {

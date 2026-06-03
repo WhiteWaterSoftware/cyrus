@@ -20,10 +20,12 @@ vi.mock("cyrus-core", async (importOriginal) => {
 	const actual = (await importOriginal()) as any;
 	return {
 		...actual,
-		PersistenceManager: vi.fn().mockImplementation(() => ({
-			loadEdgeWorkerState: vi.fn().mockResolvedValue(null),
-			saveEdgeWorkerState: vi.fn().mockResolvedValue(undefined),
-		})),
+		PersistenceManager: vi.fn().mockImplementation(function () {
+			return {
+				loadEdgeWorkerState: vi.fn().mockResolvedValue(null),
+				saveEdgeWorkerState: vi.fn().mockResolvedValue(undefined),
+			};
+		}),
 	};
 });
 vi.mock("file-type");
@@ -52,7 +54,9 @@ describe("EdgeWorker - fetchPRBranchRefs", () => {
 				description: "Test description",
 			}),
 		};
-		vi.mocked(LinearClient).mockImplementation(() => mockLinearClient);
+		vi.mocked(LinearClient).mockImplementation(function () {
+			return mockLinearClient;
+		});
 
 		// Mock ClaudeRunner
 		mockClaudeRunner = {
@@ -63,7 +67,9 @@ describe("EdgeWorker - fetchPRBranchRefs", () => {
 			on: vi.fn(),
 			removeAllListeners: vi.fn(),
 		};
-		vi.mocked(ClaudeRunner).mockImplementation(() => mockClaudeRunner);
+		vi.mocked(ClaudeRunner).mockImplementation(function () {
+			return mockClaudeRunner;
+		});
 
 		// Mock AgentSessionManager
 		mockAgentSessionManager = {
@@ -74,9 +80,9 @@ describe("EdgeWorker - fetchPRBranchRefs", () => {
 			setActivitySink: vi.fn(),
 			on: vi.fn(),
 		};
-		vi.mocked(AgentSessionManager).mockImplementation(
-			() => mockAgentSessionManager,
-		);
+		vi.mocked(AgentSessionManager).mockImplementation(function () {
+			return mockAgentSessionManager;
+		});
 
 		// Mock LinearEventTransport
 		const mockLinearEventTransport = {
@@ -84,18 +90,18 @@ describe("EdgeWorker - fetchPRBranchRefs", () => {
 			start: vi.fn().mockResolvedValue(undefined),
 			stop: vi.fn().mockResolvedValue(undefined),
 		};
-		vi.mocked(LinearEventTransport).mockImplementation(
-			() => mockLinearEventTransport,
-		);
+		vi.mocked(LinearEventTransport).mockImplementation(function () {
+			return mockLinearEventTransport;
+		});
 
 		// Mock SharedApplicationServer
 		const mockSharedAppServer = {
 			start: vi.fn().mockResolvedValue(undefined),
 			stop: vi.fn().mockResolvedValue(undefined),
 		};
-		vi.mocked(SharedApplicationServer).mockImplementation(
-			() => mockSharedAppServer,
-		);
+		vi.mocked(SharedApplicationServer).mockImplementation(function () {
+			return mockSharedAppServer;
+		});
 
 		// Create EdgeWorker config
 		mockConfig = {

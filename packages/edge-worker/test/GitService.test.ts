@@ -24,9 +24,11 @@ vi.mock("node:fs", () => ({
 }));
 
 vi.mock("../src/WorktreeIncludeService.js", () => ({
-	WorktreeIncludeService: vi.fn().mockImplementation(() => ({
-		copyIgnoredFiles: vi.fn().mockResolvedValue(undefined),
-	})),
+	WorktreeIncludeService: vi.fn().mockImplementation(function () {
+		return {
+			copyIgnoredFiles: vi.fn().mockResolvedValue(undefined),
+		};
+	}),
 }));
 
 const mockExecSync = vi.mocked(execSync);

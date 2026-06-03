@@ -23,10 +23,12 @@ vi.mock("cyrus-core", async (importOriginal) => {
 	const actual = (await importOriginal()) as any;
 	return {
 		...actual,
-		PersistenceManager: vi.fn().mockImplementation(() => ({
-			loadEdgeWorkerState: vi.fn().mockResolvedValue(null),
-			saveEdgeWorkerState: vi.fn().mockResolvedValue(undefined),
-		})),
+		PersistenceManager: vi.fn().mockImplementation(function () {
+			return {
+				loadEdgeWorkerState: vi.fn().mockResolvedValue(null),
+				saveEdgeWorkerState: vi.fn().mockResolvedValue(undefined),
+			};
+		}),
 	};
 });
 
@@ -71,18 +73,17 @@ describe("EdgeWorker - Missing Session/Repository Recovery (CYPACK-852)", () => 
 		});
 
 		// Mock ClaudeRunner
-		vi.mocked(ClaudeRunner).mockImplementation(
-			() =>
-				({
-					supportsStreamingInput: true,
-					startStreaming: vi
-						.fn()
-						.mockResolvedValue({ sessionId: "claude-session-123" }),
-					stop: vi.fn(),
-					isStreaming: vi.fn().mockReturnValue(false),
-					isRunning: vi.fn().mockReturnValue(false),
-				}) as any,
-		);
+		vi.mocked(ClaudeRunner).mockImplementation(function () {
+			return {
+				supportsStreamingInput: true,
+				startStreaming: vi
+					.fn()
+					.mockResolvedValue({ sessionId: "claude-session-123" }),
+				stop: vi.fn(),
+				isStreaming: vi.fn().mockReturnValue(false),
+				isRunning: vi.fn().mockReturnValue(false),
+			};
+		} as any);
 
 		// Mock AgentSessionManager with methods for recovery testing
 		mockAgentSessionManager = {
@@ -107,44 +108,39 @@ describe("EdgeWorker - Missing Session/Repository Recovery (CYPACK-852)", () => 
 			on: vi.fn(),
 		};
 
-		vi.mocked(AgentSessionManager).mockImplementation(
-			() => mockAgentSessionManager,
-		);
+		vi.mocked(AgentSessionManager).mockImplementation(function () {
+			return mockAgentSessionManager;
+		});
 
 		// Mock SharedApplicationServer
-		vi.mocked(SharedApplicationServer).mockImplementation(
-			() =>
-				({
-					start: vi.fn().mockResolvedValue(undefined),
-					stop: vi.fn().mockResolvedValue(undefined),
-					getFastifyInstance: vi.fn().mockReturnValue({ post: vi.fn() }),
-					getWebhookUrl: vi
-						.fn()
-						.mockReturnValue("http://localhost:3456/webhook"),
-					registerOAuthCallbackHandler: vi.fn(),
-				}) as any,
-		);
+		vi.mocked(SharedApplicationServer).mockImplementation(function () {
+			return {
+				start: vi.fn().mockResolvedValue(undefined),
+				stop: vi.fn().mockResolvedValue(undefined),
+				getFastifyInstance: vi.fn().mockReturnValue({ post: vi.fn() }),
+				getWebhookUrl: vi.fn().mockReturnValue("http://localhost:3456/webhook"),
+				registerOAuthCallbackHandler: vi.fn(),
+			};
+		} as any);
 
-		vi.mocked(LinearEventTransport).mockImplementation(
-			() =>
-				({
-					register: vi.fn(),
-					on: vi.fn(),
-					removeAllListeners: vi.fn(),
-				}) as any,
-		);
+		vi.mocked(LinearEventTransport).mockImplementation(function () {
+			return {
+				register: vi.fn(),
+				on: vi.fn(),
+				removeAllListeners: vi.fn(),
+			};
+		} as any);
 
-		vi.mocked(LinearClient).mockImplementation(
-			() =>
-				({
-					users: {
-						me: vi.fn().mockResolvedValue({
-							id: "user-123",
-							name: "Test User",
-						}),
-					},
-				}) as any,
-		);
+		vi.mocked(LinearClient).mockImplementation(function () {
+			return {
+				users: {
+					me: vi.fn().mockResolvedValue({
+						id: "user-123",
+						name: "Test User",
+					}),
+				},
+			};
+		} as any);
 
 		mockConfig = {
 			proxyUrl: "http://localhost:3000",

@@ -38,10 +38,12 @@ vi.mock("cyrus-core", async (importOriginal) => {
 		...actual,
 		isAgentSessionCreatedWebhook: vi.fn(),
 		isAgentSessionPromptedWebhook: vi.fn(),
-		PersistenceManager: vi.fn().mockImplementation(() => ({
-			loadEdgeWorkerState: vi.fn().mockResolvedValue(null),
-			saveEdgeWorkerState: vi.fn().mockResolvedValue(undefined),
-		})),
+		PersistenceManager: vi.fn().mockImplementation(function () {
+			return {
+				loadEdgeWorkerState: vi.fn().mockResolvedValue(null),
+				saveEdgeWorkerState: vi.fn().mockResolvedValue(undefined),
+			};
+		}),
 	};
 });
 vi.mock("file-type");
@@ -104,7 +106,9 @@ describe("EdgeWorker - System Prompt Resume", () => {
 			comments: vi.fn().mockResolvedValue({ nodes: [] }),
 			rawRequest: vi.fn(), // Add rawRequest to avoid validation warnings
 		};
-		vi.mocked(LinearClient).mockImplementation(() => mockLinearClient);
+		vi.mocked(LinearClient).mockImplementation(function () {
+			return mockLinearClient;
+		});
 
 		// Mock ClaudeRunner to capture config
 		mockClaudeRunner = {
@@ -118,7 +122,7 @@ describe("EdgeWorker - System Prompt Resume", () => {
 			addStreamMessage: vi.fn(),
 			updatePromptVersions: vi.fn(),
 		};
-		vi.mocked(ClaudeRunner).mockImplementation((config: any) => {
+		vi.mocked(ClaudeRunner).mockImplementation(function (config: any) {
 			capturedClaudeRunnerConfig = config;
 			return mockClaudeRunner;
 		});
@@ -154,33 +158,29 @@ describe("EdgeWorker - System Prompt Resume", () => {
 			setActivitySink: vi.fn(),
 			on: vi.fn(), // EventEmitter method
 		};
-		vi.mocked(AgentSessionManager).mockImplementation(
-			() => mockAgentSessionManager,
-		);
+		vi.mocked(AgentSessionManager).mockImplementation(function () {
+			return mockAgentSessionManager;
+		});
 
 		// Mock SharedApplicationServer
-		vi.mocked(SharedApplicationServer).mockImplementation(
-			() =>
-				({
-					start: vi.fn().mockResolvedValue(undefined),
-					stop: vi.fn().mockResolvedValue(undefined),
-					getFastifyInstance: vi.fn().mockReturnValue({ post: vi.fn() }),
-					getWebhookUrl: vi
-						.fn()
-						.mockReturnValue("http://localhost:3456/webhook"),
-					registerOAuthCallbackHandler: vi.fn(),
-				}) as any,
-		);
+		vi.mocked(SharedApplicationServer).mockImplementation(function () {
+			return {
+				start: vi.fn().mockResolvedValue(undefined),
+				stop: vi.fn().mockResolvedValue(undefined),
+				getFastifyInstance: vi.fn().mockReturnValue({ post: vi.fn() }),
+				getWebhookUrl: vi.fn().mockReturnValue("http://localhost:3456/webhook"),
+				registerOAuthCallbackHandler: vi.fn(),
+			};
+		} as any);
 
 		// Mock LinearEventTransport
-		vi.mocked(LinearEventTransport).mockImplementation(
-			() =>
-				({
-					register: vi.fn(),
-					on: vi.fn(),
-					removeAllListeners: vi.fn(),
-				}) as any,
-		);
+		vi.mocked(LinearEventTransport).mockImplementation(function () {
+			return {
+				register: vi.fn(),
+				on: vi.fn(),
+				removeAllListeners: vi.fn(),
+			};
+		} as any);
 
 		// Mock type guards
 		vi.mocked(isAgentSessionCreatedWebhook).mockReturnValue(false);

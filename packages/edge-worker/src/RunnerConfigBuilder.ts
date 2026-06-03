@@ -21,6 +21,7 @@ import type {
 import { buildIntentToAddHook } from "./hooks/IntentToAddHook.js";
 import { buildPrMarkerHook } from "./hooks/PrMarkerHook.js";
 import { appendBrowserUseAddendum } from "./prompts/browserUsePromptAddendum.js";
+import { appendCloudRuntimeAddendum } from "./prompts/cloudRuntimePromptAddendum.js";
 import { appendFailureModeAddendum } from "./prompts/failureModePromptAddendum.js";
 
 /**
@@ -242,8 +243,8 @@ export class RunnerConfigBuilder {
 			workspaceName: input.workspaceName,
 			cyrusHome: input.cyrusHome,
 			autoMemoryDirectory,
-			appendSystemPrompt: appendBrowserUseAddendum(
-				appendFailureModeAddendum(input.systemPrompt),
+			appendSystemPrompt: appendCloudRuntimeAddendum(
+				appendBrowserUseAddendum(appendFailureModeAddendum(input.systemPrompt)),
 			),
 			...(mcpConfig ? { mcpConfig } : {}),
 			...(mcpConfigPath ? { mcpConfigPath } : {}),
@@ -377,8 +378,8 @@ export class RunnerConfigBuilder {
 			cyrusHome: input.cyrusHome,
 			mcpConfigPath,
 			mcpConfig,
-			appendSystemPrompt: appendBrowserUseAddendum(
-				appendFailureModeAddendum(input.systemPrompt),
+			appendSystemPrompt: appendCloudRuntimeAddendum(
+				appendBrowserUseAddendum(appendFailureModeAddendum(input.systemPrompt)),
 			),
 			// Priority order: label override > repository config > global default
 			model: finalModel,

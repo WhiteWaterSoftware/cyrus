@@ -4,13 +4,121 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+
+## [0.2.62] - 2026-06-02
+
+### Added
+- On Cyrus-managed cloud runtimes, the agent now knows that missing system packages should be added via the dashboard: when the `CYRUS_CLOUD_RUNTIME` environment variable is set to `true`, a system-prompt addendum tells the agent to direct users to https://app.atcyrus.com/settings/packages to install missing `apt`/`npm` packages rather than installing them ad-hoc (off by default for self-host). ([CYPACK-1266](https://linear.app/ceedar/issue/CYPACK-1266), [#1272](https://github.com/cyrusagents/cyrus/pull/1272))
+
+### Packages
+
+#### cyrus-cloudflare-tunnel-client
+- cyrus-cloudflare-tunnel-client@0.2.62
+
+#### cyrus-mcp-tools
+- cyrus-mcp-tools@0.2.62
+
+#### cyrus-claude-runner
+- cyrus-claude-runner@0.2.62
+
+#### cyrus-core
+- cyrus-core@0.2.62
+
+#### cyrus-simple-agent-runner
+- cyrus-simple-agent-runner@0.2.62
+
+#### cyrus-codex-runner
+- cyrus-codex-runner@0.2.62
+
+#### cyrus-cursor-runner
+- cyrus-cursor-runner@0.2.62
+
+#### cyrus-config-updater
+- cyrus-config-updater@0.2.62
+
+#### cyrus-linear-event-transport
+- cyrus-linear-event-transport@0.2.62
+
+#### cyrus-github-event-transport
+- cyrus-github-event-transport@0.2.62
+
+#### cyrus-gitlab-event-transport
+- cyrus-gitlab-event-transport@0.2.62
+
+#### cyrus-slack-event-transport
+- cyrus-slack-event-transport@0.2.62
+
+#### cyrus-gemini-runner
+- cyrus-gemini-runner@0.2.62
+
+#### cyrus-edge-worker
+- cyrus-edge-worker@0.2.62
+
+#### cyrus-ai (CLI)
+- cyrus-ai@0.2.62
+
+## [0.2.61] - 2026-06-01
+
+### Security
+- Bumped `qs` to >=6.15.2 to address a remotely triggerable DoS (`qs.stringify` crash on null/undefined entries in comma-format arrays when `encodeValuesOnly` is set), pulled in transitively via `express`. ([CYPACK-1269](https://linear.app/ceedar/issue/CYPACK-1269), [#1274](https://github.com/ceedaragents/cyrus/pull/1274))
+
 ### Changed
+- Updated `@anthropic-ai/claude-agent-sdk` from 0.3.158 to 0.3.159. Tool list is unchanged (33 tools). See the [SDK changelog](https://github.com/anthropics/claude-agent-sdk-typescript/blob/main/CHANGELOG.md) for details. ([CYPACK-1271](https://linear.app/ceedar/issue/CYPACK-1271), [#1277](https://github.com/cyrusagents/cyrus/pull/1277))
+- Updated `@anthropic-ai/claude-agent-sdk` from 0.3.156 to 0.3.158. Tool list is unchanged (33 tools). See the [SDK changelog](https://github.com/anthropics/claude-agent-sdk-typescript/blob/main/CHANGELOG.md) for details. ([CYPACK-1268](https://linear.app/ceedar/issue/CYPACK-1268), [#1275](https://github.com/cyrusagents/cyrus/pull/1275))
 - Updated `@anthropic-ai/claude-agent-sdk` from 0.3.154 to 0.3.156 and `@anthropic-ai/sdk` from 0.100.0 to 0.100.1. See the [SDK changelog](https://github.com/anthropics/claude-agent-sdk-typescript/blob/main/CHANGELOG.md) for details. ([CYPACK-1265](https://linear.app/ceedar/issue/CYPACK-1265), [#1270](https://github.com/cyrusagents/cyrus/pull/1270))
 
 ### Added
 - Slack thread-following can now be turned off. It's on by default; disable it per-team from the Behaviours settings page, or force it off on a self-hosted instance by setting the `CYRUS_SLACK_THREAD_FOLLOWING_DISABLED` environment variable (the env variable always wins). When off, Cyrus only responds to explicit @mentions. ([CYPACK-1267](https://linear.app/ceedar/issue/CYPACK-1267), [#1273](https://github.com/cyrusagents/cyrus/pull/1273))
 - Cyrus now follows along in Slack threads it's been pulled into: once you @mention it in a thread, every later reply in that thread is fed to the same session automatically — no need to re-mention it each time. To avoid chiming in on every message, Cyrus only replies when a message is a question it can genuinely help with or is addressed to it by name; it stays quiet on side conversation, acknowledgements, and chatter not aimed at it. Replies that do @mention it still work as before, and Cyrus ignores its own messages, edits, and plain channel chatter outside threads it's part of. Thread follow-ups keep working even after Cyrus restarts — it no longer goes silent on plain replies until you re-@mention it. **Existing Slack apps must add the `message.channels`, `message.groups`, `message.mpim`, and `message.im` bot events in their Slack app's Event Subscriptions for this to take effect.** ([CYPACK-1267](https://linear.app/ceedar/issue/CYPACK-1267), [#1273](https://github.com/cyrusagents/cyrus/pull/1273))
+- New "PR review trigger" control: when disabled, a pull request review that requests changes on a Cyrus-opened PR no longer auto-starts a Cyrus session or posts an acknowledgement comment. Enabled by default, so existing behaviour is unchanged unless you turn it off. ([CYPACK-1273](https://linear.app/ceedar/issue/CYPACK-1273), [#1278](https://github.com/cyrusagents/cyrus/pull/1278))
 - A repository can now ship its own skills: any skill directories under `<repo>/.claude/skills/` are automatically discovered and made available to the agent whenever Cyrus works in that repo — for single-repo issues, multi-repo issues (skills from every participating repo are combined), and GitHub/GitLab mentions alike. ([CYPACK-1261](https://linear.app/ceedar/issue/CYPACK-1261), [#1268](https://github.com/cyrusagents/cyrus/pull/1268))
+
+### Packages
+
+#### cyrus-cloudflare-tunnel-client
+- cyrus-cloudflare-tunnel-client@0.2.61
+
+#### cyrus-mcp-tools
+- cyrus-mcp-tools@0.2.61
+
+#### cyrus-claude-runner
+- cyrus-claude-runner@0.2.61
+
+#### cyrus-core
+- cyrus-core@0.2.61
+
+#### cyrus-simple-agent-runner
+- cyrus-simple-agent-runner@0.2.61
+
+#### cyrus-codex-runner
+- cyrus-codex-runner@0.2.61
+
+#### cyrus-cursor-runner
+- cyrus-cursor-runner@0.2.61
+
+#### cyrus-config-updater
+- cyrus-config-updater@0.2.61
+
+#### cyrus-linear-event-transport
+- cyrus-linear-event-transport@0.2.61
+
+#### cyrus-github-event-transport
+- cyrus-github-event-transport@0.2.61
+
+#### cyrus-gitlab-event-transport
+- cyrus-gitlab-event-transport@0.2.61
+
+#### cyrus-slack-event-transport
+- cyrus-slack-event-transport@0.2.61
+
+#### cyrus-gemini-runner
+- cyrus-gemini-runner@0.2.61
+
+#### cyrus-edge-worker
+- cyrus-edge-worker@0.2.61
+
+#### cyrus-ai (CLI)
+- cyrus-ai@0.2.61
 
 ## [0.2.60] - 2026-05-28
 
@@ -71,7 +179,7 @@ All notable changes to this project will be documented in this file.
 - GitHub App manifest in the `cyrus-setup-github` skill now subscribes to `repository` and `organization` webhook events so future renames, transfers, and org renames can be reconciled automatically. ([#1265](https://github.com/cyrusagents/cyrus/pull/1265))
 
 ### Changed
-- Updated `@anthropic-ai/claude-agent-sdk` from `0.2.123` to `0.3.154` and `@anthropic-ai/sdk` from `^0.91.x` to `^0.100.0`. See [claude-agent-sdk CHANGELOG](https://github.com/anthropics/claude-agent-sdk-typescript/blob/main/CHANGELOG.md) for details. ([CYPACK-1257](https://linear.app/ceedar/issue/CYPACK-1257), [#1264](https://github.com/cyrusagents/cyrus/pull/1264))
+- OPUS 4.8 SUPPORT. Updated `@anthropic-ai/claude-agent-sdk` from `0.2.123` to `0.3.154` and `@anthropic-ai/sdk` from `^0.91.x` to `^0.100.0`. See [claude-agent-sdk CHANGELOG](https://github.com/anthropics/claude-agent-sdk-typescript/blob/main/CHANGELOG.md) for details. ([CYPACK-1257](https://linear.app/ceedar/issue/CYPACK-1257), [#1264](https://github.com/cyrusagents/cyrus/pull/1264))
 - Refreshed mandatory tool allowance list per SDK v0.3.154: removed deprecated `RemoteTrigger` tool, added new `Workflow` tool to `availableTools` in `config.ts` and all platform default lists in `allowed-tools-defaults.ts`. ([CYPACK-1257](https://linear.app/ceedar/issue/CYPACK-1257), [#1264](https://github.com/cyrusagents/cyrus/pull/1264))
 
 ### Packages
