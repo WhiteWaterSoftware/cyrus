@@ -1,14 +1,15 @@
 /**
- * Service for adding reactions to Slack messages.
+ * Service for adding and removing reactions on Slack messages.
  *
- * Uses the Slack Web API with a bot token to add emoji reactions,
- * typically used to acknowledge receipt of @mention webhooks.
+ * Uses the Slack Web API with a bot token to manage emoji reactions,
+ * typically used to acknowledge receipt of @mention webhooks and to
+ * signal that a message has been processed.
  */
 
 /**
- * Parameters for adding a reaction to a Slack message
+ * Parameters for adding or removing a reaction on a Slack message
  */
-export interface SlackAddReactionParams {
+export interface SlackReactionParams {
 	/** Slack Bot OAuth token */
 	token: string;
 	/** Channel ID where the message is */
@@ -31,10 +32,29 @@ export class SlackReactionService {
 	 *
 	 * @see https://api.slack.com/methods/reactions.add
 	 */
-	async addReaction(params: SlackAddReactionParams): Promise<void> {
+	async addReaction(params: SlackReactionParams): Promise<void> {
+		// "already_reacted" is not an error worth surfacing
+		await this.callReactionApi("reactions.add", params, "already_reacted");
+	}
+
+	/**
+	 * Remove a reaction from a Slack message.
+	 *
+	 * @see https://api.slack.com/methods/reactions.remove
+	 */
+	async removeReaction(params: SlackReactionParams): Promise<void> {
+		// "no_reaction" means it was never added (or already removed) — fine
+		await this.callReactionApi("reactions.remove", params, "no_reaction");
+	}
+
+	private async callReactionApi(
+		method: "reactions.add" | "reactions.remove",
+		params: SlackReactionParams,
+		ignorableError: string,
+	): Promise<void> {
 		const { token, channel, timestamp, name } = params;
 
-		const url = `${this.apiBaseUrl}/reactions.add`;
+		const url = `${this.apiBaseUrl}/${method}`;
 
 		const response = await fetch(url, {
 			method: "POST",
@@ -48,7 +68,7 @@ export class SlackReactionService {
 		if (!response.ok) {
 			const errorBody = await response.text();
 			throw new Error(
-				`[SlackReactionService] Failed to add reaction: ${response.status} ${response.statusText} - ${errorBody}`,
+				`[SlackReactionService] ${method} failed: ${response.status} ${response.statusText} - ${errorBody}`,
 			);
 		}
 
@@ -57,11 +77,7 @@ export class SlackReactionService {
 			ok: boolean;
 			error?: string;
 		};
-		if (!responseBody.ok) {
-			// "already_reacted" is not an error worth surfacing
-			if (responseBody.error === "already_reacted") {
-				return;
-			}
+		if (!responseBody.ok && responseBody.error !== ignorableError) {
 			throw new Error(
 				`[SlackReactionService] Slack API error: ${responseBody.error ?? "unknown"}`,
 			);

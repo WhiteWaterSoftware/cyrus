@@ -32,11 +32,20 @@ describe("SlackMessageTranslator", () => {
 			expect(translator.canTranslate(rest)).toBe(false);
 		});
 
-		it("returns false for unsupported eventType", () => {
+		it("returns true for message webhook events", () => {
 			expect(
 				translator.canTranslate({
 					...testWebhookEvent,
 					eventType: "message",
+				}),
+			).toBe(true);
+		});
+
+		it("returns false for unsupported eventType", () => {
+			expect(
+				translator.canTranslate({
+					...testWebhookEvent,
+					eventType: "reaction_added",
 				}),
 			).toBe(false);
 		});
@@ -193,10 +202,25 @@ describe("SlackMessageTranslator", () => {
 			expect(msg.title.endsWith("...")).toBe(true);
 		});
 
-		it("returns failure for unsupported event types", () => {
+		it("translates message events as UserPromptMessage", () => {
 			const event = {
 				...testWebhookEvent,
 				eventType: "message" as SlackWebhookEvent["eventType"],
+			};
+			const result = translator.translate(event);
+
+			expect(result.success).toBe(true);
+			if (!result.success) return;
+
+			expect(result.message.source).toBe("slack");
+			expect(result.message.action).toBe("user_prompt");
+		});
+
+		it("returns failure for unsupported event types", () => {
+			const event = {
+				...testWebhookEvent,
+				eventType:
+					"reaction_added" as unknown as SlackWebhookEvent["eventType"],
 			};
 			const result = translator.translate(event);
 
@@ -239,10 +263,24 @@ describe("SlackMessageTranslator", () => {
 			expect(result.message.sessionKey).toBe("C9876543210:1704110400.000100");
 		});
 
-		it("returns failure for unsupported event types", () => {
+		it("translates message events as UserPromptMessage", () => {
 			const event = {
 				...testWebhookEvent,
 				eventType: "message" as SlackWebhookEvent["eventType"],
+			};
+			const result = translator.translateAsUserPrompt(event);
+
+			expect(result.success).toBe(true);
+			if (!result.success) return;
+
+			expect(result.message.action).toBe("user_prompt");
+		});
+
+		it("returns failure for unsupported event types", () => {
+			const event = {
+				...testWebhookEvent,
+				eventType:
+					"reaction_added" as unknown as SlackWebhookEvent["eventType"],
 			};
 			const result = translator.translateAsUserPrompt(event);
 

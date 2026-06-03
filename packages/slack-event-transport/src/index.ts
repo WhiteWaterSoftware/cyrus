@@ -9,15 +9,17 @@ export {
 	SlackMessageTranslator,
 	stripMention,
 } from "./SlackMessageTranslator.js";
-export type { SlackAddReactionParams } from "./SlackReactionService.js";
+export type { SlackReactionParams } from "./SlackReactionService.js";
 export { SlackReactionService } from "./SlackReactionService.js";
 export type {
 	SlackAppMentionEvent,
 	SlackChannel,
 	SlackEventEnvelope,
+	SlackEventPayload,
 	SlackEventTransportConfig,
 	SlackEventTransportEvents,
 	SlackEventType,
+	SlackMessageEvent,
 	SlackUser,
 	SlackVerificationMode,
 	SlackWebhookEvent,

@@ -5,6 +5,7 @@ import type { SlackEventTransportConfig } from "../src/types.js";
 import {
 	testEventEnvelope,
 	testThreadedEventEnvelope,
+	testThreadedMessageEnvelope,
 	testUrlVerificationEnvelope,
 } from "./fixtures.js";
 
@@ -131,6 +132,8 @@ describe("SlackEventTransport", () => {
 					eventType: "app_mention",
 					eventId: "Ev0001",
 					teamId: "T0001",
+					// Proxy mode: CYHOST already gated this event upstream.
+					upstreamGated: true,
 				}),
 			);
 		});
@@ -311,13 +314,13 @@ describe("SlackEventTransport", () => {
 			expect(eventListener).not.toHaveBeenCalled();
 		});
 
-		it("ignores events with non-app_mention type", async () => {
+		it("ignores events with an unsupported type", async () => {
 			const eventListener = vi.fn();
 			transport.on("event", eventListener);
 
 			const envelope = {
 				...testEventEnvelope,
-				event: { ...testEventEnvelope.event, type: "message" },
+				event: { ...testEventEnvelope.event, type: "reaction_added" },
 			};
 			const request = createMockRequest(envelope, {
 				authorization: `Bearer ${testSecret}`,
@@ -333,6 +336,213 @@ describe("SlackEventTransport", () => {
 				ignored: true,
 			});
 			expect(eventListener).not.toHaveBeenCalled();
+		});
+
+		it("emits threaded message events as follow-ups", async () => {
+			const eventListener = vi.fn();
+			transport.on("event", eventListener);
+
+			const request = createMockRequest(testThreadedMessageEnvelope, {
+				authorization: `Bearer ${testSecret}`,
+			});
+			const reply = createMockReply();
+
+			const handler = mockFastify.routes["/slack-webhook"]!;
+			await handler(request, reply);
+
+			expect(reply.code).toHaveBeenCalledWith(200);
+			expect(reply.send).toHaveBeenCalledWith({ success: true });
+			expect(eventListener).toHaveBeenCalledWith(
+				expect.objectContaining({
+					eventType: "message",
+					eventId: "Ev0004",
+					payload: expect.objectContaining({
+						thread_ts: "1704110400.000100",
+					}),
+				}),
+			);
+		});
+
+		it("ignores non-threaded message events", async () => {
+			const eventListener = vi.fn();
+			transport.on("event", eventListener);
+
+			const envelope = {
+				...testThreadedMessageEnvelope,
+				event: { ...testThreadedMessageEnvelope.event, thread_ts: undefined },
+			};
+			const request = createMockRequest(envelope, {
+				authorization: `Bearer ${testSecret}`,
+			});
+			const reply = createMockReply();
+
+			const handler = mockFastify.routes["/slack-webhook"]!;
+			await handler(request, reply);
+
+			expect(reply.code).toHaveBeenCalledWith(200);
+			expect(reply.send).toHaveBeenCalledWith({
+				success: true,
+				ignored: true,
+			});
+			expect(eventListener).not.toHaveBeenCalled();
+		});
+
+		it("ignores message events from a bot (loop prevention)", async () => {
+			const eventListener = vi.fn();
+			transport.on("event", eventListener);
+
+			const envelope = {
+				...testThreadedMessageEnvelope,
+				event: { ...testThreadedMessageEnvelope.event, bot_id: "B0BOT" },
+			};
+			const request = createMockRequest(envelope, {
+				authorization: `Bearer ${testSecret}`,
+			});
+			const reply = createMockReply();
+
+			const handler = mockFastify.routes["/slack-webhook"]!;
+			await handler(request, reply);
+
+			expect(reply.send).toHaveBeenCalledWith({
+				success: true,
+				ignored: true,
+			});
+			expect(eventListener).not.toHaveBeenCalled();
+		});
+
+		it("ignores message events with a subtype (edits, joins, etc.)", async () => {
+			const eventListener = vi.fn();
+			transport.on("event", eventListener);
+
+			const envelope = {
+				...testThreadedMessageEnvelope,
+				event: {
+					...testThreadedMessageEnvelope.event,
+					subtype: "message_changed",
+				},
+			};
+			const request = createMockRequest(envelope, {
+				authorization: `Bearer ${testSecret}`,
+			});
+			const reply = createMockReply();
+
+			const handler = mockFastify.routes["/slack-webhook"]!;
+			await handler(request, reply);
+
+			expect(reply.send).toHaveBeenCalledWith({
+				success: true,
+				ignored: true,
+			});
+			expect(eventListener).not.toHaveBeenCalled();
+		});
+
+		it("ignores message events when thread-following is disabled", async () => {
+			const disabledTransport = new SlackEventTransport({
+				fastifyServer:
+					mockFastify as unknown as SlackEventTransportConfig["fastifyServer"],
+				verificationMode: "proxy",
+				secret: testSecret,
+				isThreadFollowingEnabled: () => false,
+			});
+			disabledTransport.register();
+			const eventListener = vi.fn();
+			disabledTransport.on("event", eventListener);
+
+			const request = createMockRequest(testThreadedMessageEnvelope, {
+				authorization: `Bearer ${testSecret}`,
+			});
+			const reply = createMockReply();
+
+			await mockFastify.routes["/slack-webhook"]!(request, reply);
+
+			expect(reply.send).toHaveBeenCalledWith({
+				success: true,
+				ignored: true,
+			});
+			expect(eventListener).not.toHaveBeenCalled();
+		});
+
+		it("still processes app_mention when thread-following is disabled, even after the message twin", async () => {
+			const disabledTransport = new SlackEventTransport({
+				fastifyServer:
+					mockFastify as unknown as SlackEventTransportConfig["fastifyServer"],
+				verificationMode: "proxy",
+				secret: testSecret,
+				isThreadFollowingEnabled: () => false,
+			});
+			disabledTransport.register();
+			const eventListener = vi.fn();
+			disabledTransport.on("event", eventListener);
+			const handler = mockFastify.routes["/slack-webhook"]!;
+
+			// The message twin of an @mention arrives first (same channel:ts).
+			const messageTwin = {
+				...testThreadedMessageEnvelope,
+				event: {
+					...testThreadedMessageEnvelope.event,
+					ts: "1704110500.000200",
+				},
+			};
+			await handler(
+				createMockRequest(messageTwin, {
+					authorization: `Bearer ${testSecret}`,
+				}),
+				createMockReply(),
+			);
+			// Dropped without poisoning the de-dup, so the app_mention still emits.
+			expect(eventListener).not.toHaveBeenCalled();
+
+			await handler(
+				createMockRequest(testThreadedEventEnvelope, {
+					authorization: `Bearer ${testSecret}`,
+				}),
+				createMockReply(),
+			);
+			expect(eventListener).toHaveBeenCalledTimes(1);
+			expect(eventListener).toHaveBeenCalledWith(
+				expect.objectContaining({ eventType: "app_mention" }),
+			);
+		});
+
+		it("de-duplicates app_mention + message delivery for the same message", async () => {
+			const eventListener = vi.fn();
+			transport.on("event", eventListener);
+
+			const handler = mockFastify.routes["/slack-webhook"]!;
+
+			// app_mention arrives first for ts 1704110500.000200
+			await handler(
+				createMockRequest(testThreadedEventEnvelope, {
+					authorization: `Bearer ${testSecret}`,
+				}),
+				createMockReply(),
+			);
+
+			// Slack also delivers the matching message event (same channel:ts)
+			const duplicateMessageEnvelope = {
+				...testThreadedMessageEnvelope,
+				event: {
+					...testThreadedMessageEnvelope.event,
+					ts: "1704110500.000200",
+				},
+			};
+			const dupReply = createMockReply();
+			await handler(
+				createMockRequest(duplicateMessageEnvelope, {
+					authorization: `Bearer ${testSecret}`,
+				}),
+				dupReply,
+			);
+
+			// Only the first (app_mention) event is emitted; the message is dropped.
+			expect(eventListener).toHaveBeenCalledTimes(1);
+			expect(eventListener).toHaveBeenCalledWith(
+				expect.objectContaining({ eventType: "app_mention" }),
+			);
+			expect(dupReply.send).toHaveBeenCalledWith({
+				success: true,
+				ignored: true,
+			});
 		});
 	});
 
@@ -431,6 +641,8 @@ describe("SlackEventTransport", () => {
 					eventType: "app_mention",
 					eventId: "Ev0001",
 					teamId: "T0001",
+					// Direct mode: no upstream gate, runtime must self-gate.
+					upstreamGated: false,
 				}),
 			);
 		});

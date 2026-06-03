@@ -4,6 +4,7 @@
 import type {
 	SlackAppMentionEvent,
 	SlackEventEnvelope,
+	SlackMessageEvent,
 	SlackWebhookEvent,
 } from "../src/types.js";
 
@@ -44,6 +45,27 @@ export const testThreadedEventEnvelope: SlackEventEnvelope = {
 	type: "event_callback",
 	event_id: "Ev0002",
 	event_time: 1704110500,
+};
+
+/** A plain follow-up reply in the thread started by testAppMentionEvent. */
+export const testThreadedMessageEvent: SlackMessageEvent = {
+	type: "message",
+	user: "U1234567890",
+	text: "Actually, also bump the timeout to 30s",
+	ts: "1704110600.000300",
+	channel: "C9876543210",
+	thread_ts: "1704110400.000100",
+	event_ts: "1704110600.000300",
+};
+
+export const testThreadedMessageEnvelope: SlackEventEnvelope = {
+	token: "deprecated-token",
+	team_id: "T0001",
+	api_app_id: "A0001",
+	event: testThreadedMessageEvent,
+	type: "event_callback",
+	event_id: "Ev0004",
+	event_time: 1704110600,
 };
 
 export const testUrlVerificationEnvelope: SlackEventEnvelope = {

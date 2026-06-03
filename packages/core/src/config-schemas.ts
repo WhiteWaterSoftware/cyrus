@@ -459,6 +459,15 @@ export const EdgeConfigSchema = z.object({
 	issueUpdateTrigger: z.boolean().optional(),
 
 	/**
+	 * Whether Cyrus follows along with all subsequent replies in a Slack thread
+	 * it has been @mentioned in (treating each reply as a follow-up prompt).
+	 * When false, Cyrus only responds to explicit @mentions. Defaults to true if
+	 * not specified. Can also be force-disabled at runtime via the
+	 * `CYRUS_SLACK_THREAD_FOLLOWING_DISABLED` environment variable.
+	 */
+	slackThreadFollowing: z.boolean().optional(),
+
+	/**
 	 * Whether to trigger agent sessions when a pull request review requests changes.
 	 * When disabled, a `pull_request_review` event produces no acknowledgement comment
 	 * and no agent session. Defaults to true if not specified.

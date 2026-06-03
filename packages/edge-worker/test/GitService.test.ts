@@ -226,6 +226,81 @@ describe("GitService", () => {
 		});
 	});
 
+	describe("getGitMetadataDirectoriesForWorkspace", () => {
+		// Map each worktree cwd to the metadata dirs `git rev-parse` reports for it.
+		const metadataByCwd: Record<string, { gitDir: string; commonDir: string }> =
+			{
+				"/ws/ENG-1/repo-a": {
+					gitDir: "/repos/repo-a/.git/worktrees/ENG-1",
+					commonDir: "/repos/repo-a/.git",
+				},
+				"/ws/ENG-1/repo-b": {
+					gitDir: "/repos/repo-b/.git/worktrees/ENG-1",
+					commonDir: "/repos/repo-b/.git",
+				},
+			};
+
+		const installRevParseMock = () => {
+			mockExecSync.mockImplementation((cmd: any, opts: any) => {
+				const cmdStr = String(cmd);
+				const cwd = String(opts?.cwd ?? "");
+				const entry = metadataByCwd[cwd];
+				if (!entry) {
+					// Container dir / non-repo path: git rev-parse fails.
+					throw new Error("not a git repository");
+				}
+				if (cmdStr.includes("--git-dir")) return `${entry.gitDir}\n`;
+				if (cmdStr.includes("--git-common-dir")) return `${entry.commonDir}\n`;
+				return "";
+			});
+		};
+
+		it("collects metadata dirs from every sub-worktree in a multi-repo workspace", () => {
+			installRevParseMock();
+
+			const result = gitService.getGitMetadataDirectoriesForWorkspace({
+				// Parent container is NOT a git repo (mkdirSync'd directory).
+				path: "/ws/ENG-1",
+				isGitWorktree: true,
+				repoPaths: {
+					"repo-a": "/ws/ENG-1/repo-a",
+					"repo-b": "/ws/ENG-1/repo-b",
+				},
+			});
+
+			expect(new Set(result)).toEqual(
+				new Set([
+					"/repos/repo-a/.git/worktrees/ENG-1",
+					"/repos/repo-a/.git",
+					"/repos/repo-b/.git/worktrees/ENG-1",
+					"/repos/repo-b/.git",
+				]),
+			);
+		});
+
+		it("resolves from workspace.path for single-repo workspaces", () => {
+			mockExecSync.mockImplementation((cmd: any, opts: any) => {
+				const cmdStr = String(cmd);
+				if (String(opts?.cwd) !== "/ws/ENG-2") {
+					throw new Error("not a git repository");
+				}
+				if (cmdStr.includes("--git-dir"))
+					return "/repos/repo-a/.git/worktrees/ENG-2\n";
+				if (cmdStr.includes("--git-common-dir")) return "/repos/repo-a/.git\n";
+				return "";
+			});
+
+			const result = gitService.getGitMetadataDirectoriesForWorkspace({
+				path: "/ws/ENG-2",
+				isGitWorktree: true,
+			});
+
+			expect(new Set(result)).toEqual(
+				new Set(["/repos/repo-a/.git/worktrees/ENG-2", "/repos/repo-a/.git"]),
+			);
+		});
+	});
+
 	// Shared helpers for test data
 	const makeIssue = (overrides: Partial<any> = {}): any => ({
 		id: "issue-1",

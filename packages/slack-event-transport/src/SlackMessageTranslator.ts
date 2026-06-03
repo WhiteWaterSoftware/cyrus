@@ -53,7 +53,7 @@ export class SlackMessageTranslator
 
 		return (
 			typeof e.eventType === "string" &&
-			e.eventType === "app_mention" &&
+			(e.eventType === "app_mention" || e.eventType === "message") &&
 			typeof e.eventId === "string" &&
 			e.payload !== null &&
 			typeof e.payload === "object"
@@ -75,6 +75,13 @@ export class SlackMessageTranslator
 			return this.translateAppMention(event, context);
 		}
 
+		// A plain `message` event is always a follow-up in an existing thread —
+		// it can only reach here for a thread Cyrus is already bound to, so it
+		// maps to a user prompt rather than a session start.
+		if (event.eventType === "message") {
+			return this.translateAppMentionAsUserPrompt(event, context);
+		}
+
 		return {
 			success: false,
 			reason: `Unsupported Slack event type: ${event.eventType}`,
@@ -90,7 +97,7 @@ export class SlackMessageTranslator
 		event: SlackWebhookEvent,
 		context?: TranslationContext,
 	): TranslationResult {
-		if (event.eventType === "app_mention") {
+		if (event.eventType === "app_mention" || event.eventType === "message") {
 			return this.translateAppMentionAsUserPrompt(event, context);
 		}
 

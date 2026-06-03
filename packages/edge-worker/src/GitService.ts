@@ -176,6 +176,35 @@ export class GitService {
 	}
 
 	/**
+	 * Resolve mutable Git metadata directories for an entire workspace,
+	 * including every repository in a multi-repo session.
+	 *
+	 * For single-repo workspaces `workspace.path` is itself the worktree, so
+	 * resolving from it is sufficient. For multi-repo workspaces, however,
+	 * `workspace.path` is a plain parent container (not a git repo) and each
+	 * repository lives in a sub-worktree under `workspace.repoPaths`. Each of
+	 * those sub-worktrees has its own linked git metadata (for example
+	 * `<mainRepo>/.git/worktrees/<name>/`) that must be writable by sandboxes —
+	 * resolving only from the container would miss them entirely, breaking
+	 * `git add`/`git merge`/etc. with "Operation not permitted".
+	 */
+	public getGitMetadataDirectoriesForWorkspace(workspace: Workspace): string[] {
+		const candidateWorkingDirs = new Set<string>([
+			workspace.path,
+			...Object.values(workspace.repoPaths ?? {}),
+		]);
+
+		const resolvedDirectories = new Set<string>();
+		for (const workingDir of candidateWorkingDirs) {
+			for (const metadataDir of this.getGitMetadataDirectories(workingDir)) {
+				resolvedDirectories.add(metadataDir);
+			}
+		}
+
+		return [...resolvedDirectories];
+	}
+
+	/**
 	 * Find an existing worktree by its checked-out branch name.
 	 * Parses `git worktree list --porcelain` output and returns the worktree path
 	 * if a worktree is found with the given branch checked out, or null otherwise.

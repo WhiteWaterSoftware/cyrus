@@ -1031,6 +1031,24 @@ export class EdgeWorker extends EventEmitter {
 	}
 
 	/**
+	 * Whether Cyrus should follow plain replies in a Slack thread it was
+	 * @mentioned in. Enabled by default; controlled by the per-team
+	 * `slackThreadFollowing` config toggle (Behaviours page) and force-disabled
+	 * by the `CYRUS_SLACK_THREAD_FOLLOWING_DISABLED` env kill-switch, which takes
+	 * precedence over the toggle. When disabled, only @mentions are processed.
+	 */
+	private isSlackThreadFollowingEnabled(): boolean {
+		const envValue = (process.env.CYRUS_SLACK_THREAD_FOLLOWING_DISABLED ?? "")
+			.toLowerCase()
+			.trim();
+		if (envValue === "true" || envValue === "1" || envValue === "yes") {
+			return false;
+		}
+		// Config toggle defaults to enabled when unset.
+		return this.config.slackThreadFollowing !== false;
+	}
+
+	/**
 	 * Register the Slack event transport for receiving forwarded Slack webhooks from CYHOST.
 	 * This creates a /slack-webhook endpoint that handles @mention events from Slack.
 	 */
@@ -1043,10 +1061,18 @@ export class EdgeWorker extends EventEmitter {
 
 		const routingContext =
 			this.promptBuilder.generateRoutingContextForAllWorkspaces();
+		// Only managed teams (cloud or self-hosted, paired with cyrus-hosted)
+		// have a Behaviours page where automatic Slack thread listening can be
+		// turned off — CYRUS_API_KEY is proof of that pairing, so the
+		// stop-listening prompt guidance is gated on it. Community members
+		// don't have the key (or the page).
+		const cyrusAppBaseUrl = process.env.CYRUS_API_KEY
+			? getCyrusAppUrl()
+			: undefined;
 		const slackAdapter = new SlackChatAdapter(
 			chatRepositoryProvider,
 			this.logger,
-			{ repositoryRoutingContext: routingContext },
+			{ repositoryRoutingContext: routingContext, cyrusAppBaseUrl },
 		);
 
 		if (
@@ -1108,6 +1134,9 @@ export class EdgeWorker extends EventEmitter {
 			fastifyServer: this.sharedApplicationServer.getFastifyInstance(),
 			verificationMode: slackVerificationMode,
 			secret: slackSecret,
+			// Live read so the per-team toggle (hot-reloaded via config) and the
+			// env kill-switch both take effect without rebuilding the transport.
+			isThreadFollowingEnabled: () => this.isSlackThreadFollowingEnabled(),
 		});
 
 		this.slackEventTransport.on("event", (event: SlackWebhookEvent) => {
@@ -4128,7 +4157,7 @@ ${taskSection}`;
 			...new Set([
 				attachmentsDir,
 				...allRepoPaths,
-				...this.gitService.getGitMetadataDirectories(workspace.path),
+				...this.gitService.getGitMetadataDirectoriesForWorkspace(workspace),
 			]),
 		];
 
@@ -7148,7 +7177,9 @@ ${input.userComment}
 				attachmentsDir,
 				repository.repositoryPath,
 				...additionalAllowedDirectories,
-				...this.gitService.getGitMetadataDirectories(session.workspace.path),
+				...this.gitService.getGitMetadataDirectoriesForWorkspace(
+					session.workspace,
+				),
 			]),
 		];
 

@@ -107,7 +107,11 @@ Construct the manifest, substituting `<AGENT_NAME>`, `<AGENT_DESCRIPTION>`, and 
             "request_url": "<CYRUS_BASE_URL>/slack-webhook",
             "bot_events": [
                 "app_mention",
-                "member_joined_channel"
+                "member_joined_channel",
+                "message.channels",
+                "message.groups",
+                "message.mpim",
+                "message.im"
             ]
         },
         "org_deploy_enabled": false,

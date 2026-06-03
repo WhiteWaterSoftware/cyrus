@@ -8,6 +8,7 @@ import type {
 	SlackEventEnvelope,
 	SlackEventTransportConfig,
 	SlackEventTransportEvents,
+	SlackMessageEvent,
 	SlackVerificationMode,
 	SlackWebhookEvent,
 } from "./types.js";
@@ -33,13 +34,28 @@ export declare interface SlackEventTransport {
  * and verifies incoming webhooks using Bearer token authentication.
  *
  * Supported Slack event types:
- * - app_mention: When the bot is mentioned with @ in a channel or thread
+ * - app_mention: When the bot is mentioned with @ in a channel or thread.
+ *   Always emitted — starts or resumes a session for the thread.
+ * - message: A plain message in a channel/thread the bot can see. Emitted only
+ *   for threaded replies that aren't the bot's own message and aren't a
+ *   subtype event (edits, joins, etc.). Whether it actually does anything is
+ *   decided downstream (ChatSessionHandler only continues already-bound
+ *   threads). Slack delivers both an `app_mention` AND a `message` event for a
+ *   message that mentions the bot, so identical `(channel, ts)` pairs are
+ *   de-duplicated here to avoid double-prompting.
  */
 export class SlackEventTransport extends EventEmitter {
 	private config: SlackEventTransportConfig;
 	private logger: ILogger;
 	private messageTranslator: SlackMessageTranslator;
 	private translationContext: TranslationContext;
+	/**
+	 * Recently emitted `channel:ts` keys, used to collapse Slack's
+	 * double-delivery of app_mention + message for the same underlying message.
+	 * Maps key → epoch ms first seen; pruned by TTL.
+	 */
+	private recentMessageKeys: Map<string, number> = new Map();
+	private static readonly DEDUP_TTL_MS = 10 * 60 * 1000;
 
 	constructor(
 		config: SlackEventTransportConfig,
@@ -179,7 +195,10 @@ export class SlackEventTransport extends EventEmitter {
 				return;
 			}
 
-			this.processAndEmitEvent(request, reply);
+			// Direct mode: Slack delivers events straight to us with no upstream
+			// gate, so the runtime must self-gate plain messages on its in-memory
+			// thread bindings.
+			this.processAndEmitEvent(request, reply, false);
 		} catch (error) {
 			const err = new Error("Slack signature verification failed");
 			if (error instanceof Error) {
@@ -236,7 +255,10 @@ export class SlackEventTransport extends EventEmitter {
 		}
 
 		try {
-			this.processAndEmitEvent(request, reply);
+			// Proxy mode: CYHOST already verified this event against its
+			// persistent thread bindings before forwarding, so a `message` event
+			// reaching us is trusted to (re)start a session for its thread.
+			this.processAndEmitEvent(request, reply, true);
 		} catch (error) {
 			const err = new Error("Proxy webhook processing failed");
 			if (error instanceof Error) {
@@ -253,6 +275,7 @@ export class SlackEventTransport extends EventEmitter {
 	private processAndEmitEvent(
 		request: FastifyRequest,
 		reply: FastifyReply,
+		upstreamGated: boolean,
 	): void {
 		const envelope = request.body as SlackEventEnvelope;
 
@@ -271,13 +294,56 @@ export class SlackEventTransport extends EventEmitter {
 
 		const event = envelope.event;
 
-		if (!event || event.type !== "app_mention") {
+		// Slack sends many event types at runtime; the envelope type only models
+		// the two we handle, so widen to string for the membership check.
+		const eventType = event?.type as string | undefined;
+		if (eventType !== "app_mention" && eventType !== "message") {
 			this.logger.debug(
-				`Ignoring unsupported event type: ${event?.type ?? "unknown"}`,
+				`Ignoring unsupported event type: ${eventType ?? "unknown"}`,
 			);
 			reply.code(200).send({ success: true, ignored: true });
 			return;
 		}
+
+		// Thread-following can be disabled (per-team toggle pushed via config, or
+		// the CYRUS_SLACK_THREAD_FOLLOWING_DISABLED env kill-switch). When off,
+		// behave exactly like the app_mention-only runtime: drop `message` events
+		// here — BEFORE the de-dup below records their (channel, ts) — so a
+		// mention's `message` twin can never suppress its `app_mention`.
+		if (
+			event.type === "message" &&
+			this.config.isThreadFollowingEnabled &&
+			!this.config.isThreadFollowingEnabled()
+		) {
+			this.logger.debug(
+				`Slack thread-following disabled; ignoring message event (channel ${event.channel})`,
+			);
+			reply.code(200).send({ success: true, ignored: true });
+			return;
+		}
+
+		// `message` events fire for every message in every channel the bot can
+		// see, so apply cheap structural filters before doing any work. Anything
+		// that gets through here is a candidate follow-up prompt; the binding
+		// check (is this thread actually bound to Cyrus?) happens downstream.
+		if (event.type === "message" && !this.shouldEmitMessageEvent(event)) {
+			reply.code(200).send({ success: true, ignored: true });
+			return;
+		}
+
+		// Slack delivers both an app_mention and a message event for a single
+		// message that mentions the bot. De-duplicate on (channel, ts) so the
+		// thread only gets prompted once. The first event to arrive wins; both
+		// carry identical text.
+		const dedupKey = `${event.channel}:${event.ts}`;
+		if (this.isDuplicateMessage(dedupKey)) {
+			this.logger.debug(
+				`Ignoring duplicate Slack event for ${dedupKey} (already processed)`,
+			);
+			reply.code(200).send({ success: true, ignored: true });
+			return;
+		}
+		this.rememberMessage(dedupKey);
 
 		// Token may be undefined during startup transitions (e.g. switching runtimes)
 		// when the env update hasn't been processed yet. Downstream consumers
@@ -285,15 +351,16 @@ export class SlackEventTransport extends EventEmitter {
 		const slackBotToken = this.getSlackBotToken();
 
 		const webhookEvent: SlackWebhookEvent = {
-			eventType: "app_mention",
+			eventType: event.type,
 			eventId: envelope.event_id,
 			payload: event,
 			slackBotToken,
 			teamId: envelope.team_id,
+			upstreamGated,
 		};
 
 		this.logger.info(
-			`Received app_mention webhook (event: ${envelope.event_id}, channel: ${event.channel})`,
+			`Received ${event.type} webhook (event: ${envelope.event_id}, channel: ${event.channel})`,
 		);
 
 		// Emit "event" for transport-level listeners
@@ -303,6 +370,53 @@ export class SlackEventTransport extends EventEmitter {
 		this.emitMessage(webhookEvent);
 
 		reply.code(200).send({ success: true });
+	}
+
+	/**
+	 * Decide whether a `message` event is a candidate follow-up prompt.
+	 *
+	 * Drops the bot's own messages (which would otherwise loop), edited/deleted
+	 * and other subtype events, and top-level (non-threaded) messages — only a
+	 * threaded reply can belong to a thread Cyrus is already bound to.
+	 */
+	private shouldEmitMessageEvent(event: SlackMessageEvent): boolean {
+		if (event.bot_id) {
+			this.logger.debug(
+				`Ignoring Slack message from bot ${event.bot_id} (channel ${event.channel})`,
+			);
+			return false;
+		}
+		if (event.subtype) {
+			this.logger.debug(
+				`Ignoring Slack message with subtype "${event.subtype}" (channel ${event.channel})`,
+			);
+			return false;
+		}
+		if (!event.thread_ts) {
+			this.logger.debug(
+				`Ignoring non-threaded Slack message (channel ${event.channel})`,
+			);
+			return false;
+		}
+		return true;
+	}
+
+	private isDuplicateMessage(key: string): boolean {
+		this.pruneRecentMessageKeys();
+		return this.recentMessageKeys.has(key);
+	}
+
+	private rememberMessage(key: string): void {
+		this.recentMessageKeys.set(key, Date.now());
+	}
+
+	private pruneRecentMessageKeys(): void {
+		const now = Date.now();
+		for (const [key, seenAt] of this.recentMessageKeys) {
+			if (now - seenAt > SlackEventTransport.DEDUP_TTL_MS) {
+				this.recentMessageKeys.delete(key);
+			}
+		}
 	}
 
 	/**
