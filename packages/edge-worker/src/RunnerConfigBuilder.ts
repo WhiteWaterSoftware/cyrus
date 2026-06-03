@@ -279,6 +279,9 @@ export class RunnerConfigBuilder {
 		// Cloud-only per-Bash cgroup v2 memory budgeting (CYHOST-1012). Both
 		// hooks are no-ops unless CYRUS_CLOUD_RUNTIME is truthy, the budget env
 		// var is set, and the cyrus-tool-exec wrapper exists on the droplet image.
+		// The OOM report hook registers on PostToolUseFailure: an OOM-killed
+		// command exits non-zero, so its result is routed to the failure event,
+		// never to (successful) PostToolUse.
 		const memoryLimitHook = buildMemoryLimitHook(log);
 		const oomReportHook = buildOomReportHook(log);
 		const stopHook = this.buildStopHook(log);
@@ -289,8 +292,8 @@ export class RunnerConfigBuilder {
 				...(screenshotHooks.PostToolUse ?? []),
 				...(prMarkerHook.PostToolUse ?? []),
 				...(intentToAddHook.PostToolUse ?? []),
-				...(oomReportHook.PostToolUse ?? []),
 			],
+			PostToolUseFailure: [...(oomReportHook.PostToolUseFailure ?? [])],
 		};
 
 		// Determine runner type and model override from selectors

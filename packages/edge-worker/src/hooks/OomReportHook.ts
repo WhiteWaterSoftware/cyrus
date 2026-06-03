@@ -2,7 +2,7 @@ import type {
 	HookCallbackMatcher,
 	HookEvent,
 	HookJSONOutput,
-	PostToolUseHookInput,
+	PostToolUseFailureHookInput,
 } from "cyrus-claude-runner";
 import { getCyrusAppUrl } from "cyrus-cloudflare-tunnel-client";
 import type { ILogger } from "cyrus-core";
@@ -110,8 +110,9 @@ export class HttpOomEventReporter implements OomEventReporter {
 }
 
 /**
- * Collapse a Bash `tool_response` (string, or `{ stdout, stderr, ... }`-shaped
- * object) into a single searchable string. Falls back to JSON for unexpected
+ * Collapse a failed Bash result into a single searchable string. Handles the
+ * `error: string` carried by `PostToolUseFailureHookInput`, a raw string, or a
+ * `{ stdout, stderr, ... }`-shaped object, falling back to JSON for unexpected
  * shapes so the marker substring check still works.
  */
 export function extractResultText(toolResponse: unknown): string {
@@ -140,25 +141,36 @@ export function extractResultText(toolResponse: unknown): string {
 }
 
 /**
- * Build the PostToolUse hook that reports per-command OOM kills to the
- * cyrus-hosted control plane. The hook's sole responsibility is to detect
- * {@link OOM_MARKER} in the Bash result, parse it, and hand a structured
- * {@link OomEvent} to the injected {@link OomEventReporter} — delivery details
- * (auth, URL, timeout, fail-open) live in the reporter.
+ * Build the hook that reports per-command OOM kills to the cyrus-hosted control
+ * plane. It registers on **`PostToolUseFailure`**, not `PostToolUse`: an
+ * OOM-killed command exits non-zero, so the SDK routes its result to the
+ * failure event — the {@link OOM_MARKER} can therefore never appear in a
+ * (successful) `PostToolUse` result. The hook's sole responsibility is to
+ * detect the marker, parse it, and hand a structured {@link OomEvent} to the
+ * injected {@link OomEventReporter} — delivery details (auth, URL, timeout,
+ * fail-open) live in the reporter.
+ *
+ * On `PostToolUseFailure` the failure detail lives in `error` (a string). We
+ * also fold in any `tool_response` if a future SDK surfaces one, so the marker
+ * is found regardless of which field carries it.
  */
 export function buildOomReportHook(
 	log: ILogger,
 	reporter: OomEventReporter = new HttpOomEventReporter(log),
 ): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
 	return {
-		PostToolUse: [
+		PostToolUseFailure: [
 			{
 				matcher: "Bash",
 				hooks: [
 					async (input): Promise<HookJSONOutput> => {
 						try {
-							const post = input as PostToolUseHookInput;
-							const text = extractResultText(post.tool_response);
+							const post = input as PostToolUseFailureHookInput & {
+								tool_response?: unknown;
+							};
+							const text = `${extractResultText(post.error)}\n${extractResultText(
+								post.tool_response,
+							)}`;
 							if (!text.includes(OOM_MARKER)) {
 								return {};
 							}

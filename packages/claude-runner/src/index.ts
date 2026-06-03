@@ -4,6 +4,7 @@ export type {
 	HookEvent,
 	HookInput,
 	HookJSONOutput,
+	PostToolUseFailureHookInput,
 	PostToolUseHookInput,
 	PreToolUseHookInput,
 	Query,

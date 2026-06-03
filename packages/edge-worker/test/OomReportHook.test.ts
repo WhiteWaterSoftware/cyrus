@@ -1,6 +1,6 @@
 import type {
 	HookCallbackMatcher,
-	PostToolUseHookInput,
+	PostToolUseFailureHookInput,
 } from "cyrus-claude-runner";
 import type { ILogger } from "cyrus-core";
 import { describe, expect, it, vi } from "vitest";
@@ -22,25 +22,30 @@ const silentLogger: ILogger = {
 
 const MARKER_TEXT = `${OOM_MARKER} exceeded 1300M memory budget (peak 1500000000 bytes).`;
 
-function makePostInput(
-	toolResponse: unknown,
+/**
+ * A `PostToolUseFailure` input — the event an OOM-killed (non-zero-exit) Bash
+ * command is routed to. The failure detail (and thus the OOM marker) lives in
+ * the `error` string.
+ */
+function makeFailureInput(
+	errorText: string,
 	command = "pnpm test",
-): PostToolUseHookInput {
+): PostToolUseFailureHookInput {
 	return {
-		hook_event_name: "PostToolUse",
+		hook_event_name: "PostToolUseFailure",
 		session_id: "s",
 		transcript_path: "t",
 		cwd: "/work",
 		tool_name: "Bash",
 		tool_input: { command },
-		tool_response: toolResponse,
 		tool_use_id: "u",
-	} as PostToolUseHookInput;
+		error: errorText,
+	} as PostToolUseFailureHookInput;
 }
 
 async function runPost(
 	matcher: HookCallbackMatcher,
-	input: PostToolUseHookInput,
+	input: PostToolUseFailureHookInput,
 ): Promise<any> {
 	const fn = matcher.hooks[0];
 	return fn(input as any, "u", { signal: new AbortController().signal });
@@ -48,9 +53,9 @@ async function runPost(
 
 function postMatcher(reporter: OomEventReporter): HookCallbackMatcher {
 	const hook = buildOomReportHook(silentLogger, reporter);
-	const matcher = hook.PostToolUse?.[0];
+	const matcher = hook.PostToolUseFailure?.[0];
 	if (!matcher) {
-		throw new Error("expected a PostToolUse matcher");
+		throw new Error("expected a PostToolUseFailure matcher");
 	}
 	return matcher;
 }
@@ -83,22 +88,26 @@ describe("extractResultText", () => {
 });
 
 describe("buildOomReportHook", () => {
-	it("registers a Bash matcher under PostToolUse", () => {
-		const matcher = postMatcher(recordingReporter());
-		expect(matcher.matcher).toBe("Bash");
+	it("registers a Bash matcher under PostToolUseFailure (not PostToolUse)", () => {
+		const hook = buildOomReportHook(silentLogger, recordingReporter());
+		expect(hook.PostToolUse).toBeUndefined();
+		expect(hook.PostToolUseFailure?.[0]?.matcher).toBe("Bash");
 	});
 
 	it("does not report when the marker is absent", async () => {
 		const reporter = recordingReporter();
-		await runPost(postMatcher(reporter), makePostInput("all good"));
+		await runPost(
+			postMatcher(reporter),
+			makeFailureInput("command failed: exit 1"),
+		);
 		expect(reporter.events).toHaveLength(0);
 	});
 
-	it("reports a parsed event with the program name only when the marker is present", async () => {
+	it("reports a parsed event from the `error` field with the program name only", async () => {
 		const reporter = recordingReporter();
 		await runPost(
 			postMatcher(reporter),
-			makePostInput({ stderr: MARKER_TEXT }, "pnpm run heavy"),
+			makeFailureInput(MARKER_TEXT, "pnpm run heavy"),
 		);
 		expect(reporter.events).toEqual([
 			{
@@ -109,12 +118,27 @@ describe("buildOomReportHook", () => {
 		]);
 	});
 
+	it("also finds the marker if a future SDK carries it in tool_response", async () => {
+		const reporter = recordingReporter();
+		const input = {
+			...makeFailureInput("", "node server.js"),
+			error: "",
+			tool_response: { stderr: MARKER_TEXT },
+		} as unknown as PostToolUseFailureHookInput;
+		await runPost(postMatcher(reporter), input);
+		expect(reporter.events[0]).toMatchObject({
+			budgetMb: 1300,
+			peakBytes: 1500000000,
+			commandExcerpt: "node",
+		});
+	});
+
 	it("sends only the program name, never wrapper prefix or secret-bearing args", async () => {
 		const reporter = recordingReporter();
 		const wrapped = wrapCommand("TOKEN=shh ./deploy.sh --key abc", "1300");
 		await runPost(
 			postMatcher(reporter),
-			makePostInput({ stderr: MARKER_TEXT }, wrapped),
+			makeFailureInput(MARKER_TEXT, wrapped),
 		);
 		expect(reporter.events[0].commandExcerpt).toBe("deploy.sh");
 	});
@@ -127,7 +151,7 @@ describe("buildOomReportHook", () => {
 		};
 		const result = await runPost(
 			postMatcher(reporter),
-			makePostInput({ stderr: MARKER_TEXT }),
+			makeFailureInput(MARKER_TEXT),
 		);
 		expect(result).toEqual({});
 	});
