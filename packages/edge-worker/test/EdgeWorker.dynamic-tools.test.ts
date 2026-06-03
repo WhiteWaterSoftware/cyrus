@@ -155,61 +155,55 @@ describe("EdgeWorker - Dynamic Tools Configuration", () => {
 		};
 
 		// Mock SharedApplicationServer
-		vi.mocked(SharedApplicationServer).mockImplementation(
-			() =>
-				({
-					start: vi.fn().mockResolvedValue(undefined),
-					stop: vi.fn().mockResolvedValue(undefined),
-					getFastifyInstance: vi.fn().mockReturnValue({ post: vi.fn() }),
-					getWebhookUrl: vi
-						.fn()
-						.mockReturnValue("http://localhost:3456/webhook"),
-					setWebhookHandler: vi.fn(),
-					setOAuthCallbackHandler: vi.fn(),
-				}) as any,
-		);
+		vi.mocked(SharedApplicationServer).mockImplementation(function () {
+			return {
+				start: vi.fn().mockResolvedValue(undefined),
+				stop: vi.fn().mockResolvedValue(undefined),
+				getFastifyInstance: vi.fn().mockReturnValue({ post: vi.fn() }),
+				getWebhookUrl: vi.fn().mockReturnValue("http://localhost:3456/webhook"),
+				setWebhookHandler: vi.fn(),
+				setOAuthCallbackHandler: vi.fn(),
+			};
+		} as any);
 
 		// Mock AgentSessionManager
-		vi.mocked(AgentSessionManager).mockImplementation(
-			() =>
-				({
-					addSession: vi.fn(),
-					getSession: vi.fn(),
-					removeSession: vi.fn(),
-					getAllSessions: vi.fn().mockReturnValue([]),
-					clearAllSessions: vi.fn(),
-					on: vi.fn(), // EventEmitter method
-				}) as any,
-		);
+		vi.mocked(AgentSessionManager).mockImplementation(function () {
+			return {
+				addSession: vi.fn(),
+				getSession: vi.fn(),
+				removeSession: vi.fn(),
+				getAllSessions: vi.fn().mockReturnValue([]),
+				clearAllSessions: vi.fn(),
+				on: vi.fn(), // EventEmitter method
+			};
+		} as any);
 
 		// Mock LinearEventTransport
-		vi.mocked(LinearEventTransport).mockImplementation(
-			() =>
-				({
-					register: vi.fn(),
-					on: vi.fn(),
-					removeAllListeners: vi.fn(),
-				}) as any,
-		);
+		vi.mocked(LinearEventTransport).mockImplementation(function () {
+			return {
+				register: vi.fn(),
+				on: vi.fn(),
+				removeAllListeners: vi.fn(),
+			};
+		} as any);
 
 		// Mock LinearClient
-		vi.mocked(LinearClient).mockImplementation(
-			() =>
-				({
-					viewer: vi
-						.fn()
-						.mockResolvedValue({ id: "test-user", email: "test@example.com" }),
-					issue: vi.fn(),
-					comment: vi.fn(),
-					createComment: vi.fn(),
-					webhook: vi.fn(),
-					webhooks: vi.fn(),
-					createWebhook: vi.fn(),
-					updateWebhook: vi.fn(),
-					deleteWebhook: vi.fn(),
-					user: vi.fn(),
-				}) as any,
-		);
+		vi.mocked(LinearClient).mockImplementation(function () {
+			return {
+				viewer: vi
+					.fn()
+					.mockResolvedValue({ id: "test-user", email: "test@example.com" }),
+				issue: vi.fn(),
+				comment: vi.fn(),
+				createComment: vi.fn(),
+				webhook: vi.fn(),
+				webhooks: vi.fn(),
+				createWebhook: vi.fn(),
+				updateWebhook: vi.fn(),
+				deleteWebhook: vi.fn(),
+				user: vi.fn(),
+			};
+		} as any);
 
 		edgeWorker = new EdgeWorker(mockConfig);
 	});

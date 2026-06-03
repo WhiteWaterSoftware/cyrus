@@ -19,16 +19,18 @@ vi.mock("@linear/sdk", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@linear/sdk")>();
 	return {
 		...actual,
-		LinearClient: vi.fn().mockImplementation(() => ({
-			issue: vi.fn(),
-			viewer: Promise.resolve({
-				organization: Promise.resolve({ id: "ws-123", name: "Test" }),
-			}),
-			client: {
-				request: vi.fn(),
-				setHeader: vi.fn(),
-			},
-		})),
+		LinearClient: vi.fn().mockImplementation(function () {
+			return {
+				issue: vi.fn(),
+				viewer: Promise.resolve({
+					organization: Promise.resolve({ id: "ws-123", name: "Test" }),
+				}),
+				client: {
+					request: vi.fn(),
+					setHeader: vi.fn(),
+				},
+			};
+		}),
 	};
 });
 vi.mock("../src/SharedApplicationServer.js");
@@ -37,10 +39,12 @@ vi.mock("cyrus-core", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("cyrus-core")>();
 	return {
 		...actual,
-		PersistenceManager: vi.fn().mockImplementation(() => ({
-			loadEdgeWorkerState: vi.fn().mockResolvedValue(null),
-			saveEdgeWorkerState: vi.fn().mockResolvedValue(undefined),
-		})),
+		PersistenceManager: vi.fn().mockImplementation(function () {
+			return {
+				loadEdgeWorkerState: vi.fn().mockResolvedValue(null),
+				saveEdgeWorkerState: vi.fn().mockResolvedValue(undefined),
+			};
+		}),
 	};
 });
 vi.mock("file-type");

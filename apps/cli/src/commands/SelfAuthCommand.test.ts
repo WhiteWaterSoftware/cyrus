@@ -43,7 +43,10 @@ vi.mock("@linear/sdk", async (importOriginal) => {
 	const actual = await importOriginal();
 	return {
 		...(actual as object),
-		LinearClient: vi.fn(() => mockLinearClient),
+		// Regular function (not arrow) so vitest 4 can invoke the mock with `new`.
+		LinearClient: vi.fn(function () {
+			return mockLinearClient;
+		}),
 	};
 });
 
@@ -446,14 +449,16 @@ describe("SelfAuthCommand", () => {
 
 			// Update the LinearClient mock for this specific test
 			const { LinearClient } = await import("@linear/sdk");
-			(LinearClient as any).mockImplementation(() => ({
-				viewer: Promise.resolve({
-					organization: Promise.resolve({
-						id: "ws-123",
-						name: "Workspace",
+			(LinearClient as any).mockImplementation(function () {
+				return {
+					viewer: Promise.resolve({
+						organization: Promise.resolve({
+							id: "ws-123",
+							name: "Workspace",
+						}),
 					}),
-				}),
-			}));
+				};
+			});
 
 			await expect(command.execute([])).rejects.toThrow("process.exit called");
 			expect(mockExit).toHaveBeenCalledWith(0);
@@ -518,14 +523,16 @@ describe("SelfAuthCommand", () => {
 
 			// Update the LinearClient mock for this specific test
 			const { LinearClient } = await import("@linear/sdk");
-			(LinearClient as any).mockImplementation(() => ({
-				viewer: Promise.resolve({
-					organization: Promise.resolve({
-						id: "ws-new",
-						name: "New Workspace",
+			(LinearClient as any).mockImplementation(function () {
+				return {
+					viewer: Promise.resolve({
+						organization: Promise.resolve({
+							id: "ws-new",
+							name: "New Workspace",
+						}),
 					}),
-				}),
-			}));
+				};
+			});
 
 			await expect(command.execute([])).rejects.toThrow("process.exit called");
 			expect(mockExit).toHaveBeenCalledWith(0);

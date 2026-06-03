@@ -18,28 +18,32 @@ vi.mock("cyrus-gemini-runner");
 vi.mock("cyrus-linear-event-transport");
 vi.mock("@linear/sdk");
 vi.mock("../src/SharedApplicationServer.js", () => ({
-	SharedApplicationServer: vi.fn().mockImplementation(() => ({
-		initializeFastify: vi.fn(),
-		getFastifyInstance: vi.fn().mockReturnValue({
-			get: vi.fn(),
-			post: vi.fn(),
-		}),
-		start: vi.fn().mockResolvedValue(undefined),
-		stop: vi.fn().mockResolvedValue(undefined),
-		getWebhookUrl: vi.fn().mockReturnValue("http://localhost:3456/webhook"),
-	})),
+	SharedApplicationServer: vi.fn().mockImplementation(function () {
+		return {
+			initializeFastify: vi.fn(),
+			getFastifyInstance: vi.fn().mockReturnValue({
+				get: vi.fn(),
+				post: vi.fn(),
+			}),
+			start: vi.fn().mockResolvedValue(undefined),
+			stop: vi.fn().mockResolvedValue(undefined),
+			getWebhookUrl: vi.fn().mockReturnValue("http://localhost:3456/webhook"),
+		};
+	}),
 }));
 vi.mock("../src/AgentSessionManager.js", () => ({
-	AgentSessionManager: vi.fn().mockImplementation(() => ({
-		getAllAgentRunners: vi.fn().mockReturnValue([]),
-		getAllSessions: vi.fn().mockReturnValue([]),
-		createCyrusAgentSession: vi.fn(),
-		getSession: vi.fn(),
-		getActiveSessionsByIssueId: vi.fn().mockReturnValue([]),
-		setActivitySink: vi.fn(),
-		on: vi.fn(), // EventEmitter method
-		emit: vi.fn(), // EventEmitter method
-	})),
+	AgentSessionManager: vi.fn().mockImplementation(function () {
+		return {
+			getAllAgentRunners: vi.fn().mockReturnValue([]),
+			getAllSessions: vi.fn().mockReturnValue([]),
+			createCyrusAgentSession: vi.fn(),
+			getSession: vi.fn(),
+			getActiveSessionsByIssueId: vi.fn().mockReturnValue([]),
+			setActivitySink: vi.fn(),
+			on: vi.fn(), // EventEmitter method
+			emit: vi.fn(), // EventEmitter method
+		};
+	}),
 }));
 vi.mock("cyrus-core", async (importOriginal) => {
 	const actual = (await importOriginal()) as any;
@@ -51,10 +55,12 @@ vi.mock("cyrus-core", async (importOriginal) => {
 		isIssueCommentMentionWebhook: vi.fn().mockReturnValue(false),
 		isIssueNewCommentWebhook: vi.fn().mockReturnValue(false),
 		isIssueUnassignedWebhook: vi.fn().mockReturnValue(false),
-		PersistenceManager: vi.fn().mockImplementation(() => ({
-			loadEdgeWorkerState: vi.fn().mockResolvedValue(null),
-			saveEdgeWorkerState: vi.fn().mockResolvedValue(undefined),
-		})),
+		PersistenceManager: vi.fn().mockImplementation(function () {
+			return {
+				loadEdgeWorkerState: vi.fn().mockResolvedValue(null),
+				saveEdgeWorkerState: vi.fn().mockResolvedValue(undefined),
+			};
+		}),
 	};
 });
 vi.mock("file-type");
@@ -273,18 +279,17 @@ describe("EdgeWorker - Status Endpoint", () => {
 			const { SharedApplicationServer } = await import(
 				"../src/SharedApplicationServer.js"
 			);
-			vi.mocked(SharedApplicationServer).mockImplementation(
-				() =>
-					({
-						initializeFastify: vi.fn(),
-						getFastifyInstance: vi.fn().mockReturnValue(mockFastify),
-						start: vi.fn().mockResolvedValue(undefined),
-						stop: vi.fn().mockResolvedValue(undefined),
-						getWebhookUrl: vi
-							.fn()
-							.mockReturnValue("http://localhost:3456/webhook"),
-					}) as any,
-			);
+			vi.mocked(SharedApplicationServer).mockImplementation(function () {
+				return {
+					initializeFastify: vi.fn(),
+					getFastifyInstance: vi.fn().mockReturnValue(mockFastify),
+					start: vi.fn().mockResolvedValue(undefined),
+					stop: vi.fn().mockResolvedValue(undefined),
+					getWebhookUrl: vi
+						.fn()
+						.mockReturnValue("http://localhost:3456/webhook"),
+				};
+			} as any);
 
 			edgeWorker = new EdgeWorker(mockConfig);
 
@@ -310,18 +315,17 @@ describe("EdgeWorker - Status Endpoint", () => {
 			const { SharedApplicationServer } = await import(
 				"../src/SharedApplicationServer.js"
 			);
-			vi.mocked(SharedApplicationServer).mockImplementation(
-				() =>
-					({
-						initializeFastify: vi.fn(),
-						getFastifyInstance: vi.fn().mockReturnValue(mockFastify),
-						start: vi.fn().mockResolvedValue(undefined),
-						stop: vi.fn().mockResolvedValue(undefined),
-						getWebhookUrl: vi
-							.fn()
-							.mockReturnValue("http://localhost:3456/webhook"),
-					}) as any,
-			);
+			vi.mocked(SharedApplicationServer).mockImplementation(function () {
+				return {
+					initializeFastify: vi.fn(),
+					getFastifyInstance: vi.fn().mockReturnValue(mockFastify),
+					start: vi.fn().mockResolvedValue(undefined),
+					stop: vi.fn().mockResolvedValue(undefined),
+					getWebhookUrl: vi
+						.fn()
+						.mockReturnValue("http://localhost:3456/webhook"),
+				};
+			} as any);
 
 			edgeWorker = new EdgeWorker(mockConfig);
 			(edgeWorker as any).registerStatusEndpoint();
@@ -355,18 +359,17 @@ describe("EdgeWorker - Status Endpoint", () => {
 			const { SharedApplicationServer } = await import(
 				"../src/SharedApplicationServer.js"
 			);
-			vi.mocked(SharedApplicationServer).mockImplementation(
-				() =>
-					({
-						initializeFastify: vi.fn(),
-						getFastifyInstance: vi.fn().mockReturnValue(mockFastify),
-						start: vi.fn().mockResolvedValue(undefined),
-						stop: vi.fn().mockResolvedValue(undefined),
-						getWebhookUrl: vi
-							.fn()
-							.mockReturnValue("http://localhost:3456/webhook"),
-					}) as any,
-			);
+			vi.mocked(SharedApplicationServer).mockImplementation(function () {
+				return {
+					initializeFastify: vi.fn(),
+					getFastifyInstance: vi.fn().mockReturnValue(mockFastify),
+					start: vi.fn().mockResolvedValue(undefined),
+					stop: vi.fn().mockResolvedValue(undefined),
+					getWebhookUrl: vi
+						.fn()
+						.mockReturnValue("http://localhost:3456/webhook"),
+				};
+			} as any);
 
 			edgeWorker = new EdgeWorker(mockConfig);
 			(edgeWorker as any).registerStatusEndpoint();

@@ -65,7 +65,11 @@ describe("SimpleGeminiRunner", () => {
 			_messages: [], // Internal state for test control
 		};
 
-		MockedGeminiRunner.mockImplementation(() => mockRunner);
+		// Regular function (not arrow) so vitest 4 can invoke the mock with `new`;
+		// returning an object from a constructor makes `new GeminiRunner()` yield it.
+		MockedGeminiRunner.mockImplementation(function () {
+			return mockRunner;
+		} as unknown as () => GeminiRunner);
 
 		runner = new SimpleGeminiRunner(defaultConfig);
 	});
