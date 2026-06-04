@@ -94,6 +94,14 @@ export interface ChatRunnerConfigInput {
 	 * run as usual).
 	 */
 	platformMcpConfigOverrides?: readonly string[];
+	/** Plugins to load for the chat session (provides managed skills). */
+	plugins?: SdkPluginConfig[];
+	/**
+	 * Allow-list of skill names enabled for the chat session after scope
+	 * filtering. Claude passes this to the SDK directly; Codex stages only
+	 * these skills into its repository discovery layout.
+	 */
+	skills?: string[] | "all";
 	logger: ILogger;
 	onMessage: (message: SDKMessage) => void | Promise<void>;
 	onError: (error: Error) => void;
@@ -252,6 +260,8 @@ export class RunnerConfigBuilder {
 			...(input.resumeSessionId
 				? { resumeSessionId: input.resumeSessionId }
 				: {}),
+			...(input.plugins?.length ? { plugins: input.plugins } : {}),
+			...(input.skills !== undefined ? { skills: input.skills } : {}),
 			logger: input.logger,
 			maxTurns: 200,
 			onMessage: input.onMessage,
