@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	lstatSync,
@@ -145,5 +146,36 @@ describe("CodexRunner managed skills", () => {
 		runner.stop();
 
 		expect(existsSync(stagedUserSkill)).toBe(false);
+	});
+
+	it("adds the staged .agents directory to local git exclude", () => {
+		const root = makeTempDir();
+		const worktree = join(root, "worktree");
+		const userPlugin = join(root, "user-plugin");
+		mkdirSync(worktree, { recursive: true });
+		execFileSync("git", ["init"], { cwd: worktree, stdio: "ignore" });
+		writeSkill(join(userPlugin, "skills"), "custom-user");
+
+		const runner = new CodexRunner({
+			workingDirectory: worktree,
+			cyrusHome: root,
+			plugins: [{ type: "local", path: userPlugin }],
+			skills: ["custom-user"],
+		});
+
+		(
+			runner as unknown as { prepareManagedSkillsForCodex: () => void }
+		).prepareManagedSkillsForCodex();
+
+		const exclude = readFileSync(join(worktree, ".git", "info", "exclude"), {
+			encoding: "utf-8",
+		});
+		expect(exclude.split(/\r?\n/)).toContain(".agents/");
+
+		const status = execFileSync("git", ["status", "--short"], {
+			cwd: worktree,
+			encoding: "utf-8",
+		});
+		expect(status).not.toContain(".agents");
 	});
 });

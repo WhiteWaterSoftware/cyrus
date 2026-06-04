@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
+	appendFileSync,
 	type Dirent,
 	existsSync,
 	lstatSync,
@@ -11,7 +13,7 @@ import {
 	symlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join, relative as pathRelative } from "node:path";
+import { dirname, isAbsolute, join, relative as pathRelative } from "node:path";
 import { cwd } from "node:process";
 import type {
 	CommandExecutionItem,
@@ -645,6 +647,7 @@ export class CodexRunner extends EventEmitter implements IAgentRunner {
 			return;
 		}
 		mkdirSync(skillsRoot, { recursive: true });
+		this.ensureManagedSkillsIgnored();
 
 		for (const source of skillSources) {
 			const target = join(skillsRoot, source.name);
@@ -701,6 +704,46 @@ export class CodexRunner extends EventEmitter implements IAgentRunner {
 			return undefined;
 		}
 		return join(workingDirectory, ".agents", "skills");
+	}
+
+	private ensureManagedSkillsIgnored(): void {
+		const workingDirectory = this.config.workingDirectory;
+		if (!workingDirectory) {
+			return;
+		}
+
+		try {
+			const rawExcludePath = execFileSync(
+				"git",
+				["rev-parse", "--git-path", "info/exclude"],
+				{
+					cwd: workingDirectory,
+					encoding: "utf-8",
+					stdio: ["ignore", "pipe", "ignore"],
+				},
+			).trim();
+			if (!rawExcludePath) {
+				return;
+			}
+			const excludePath = isAbsolute(rawExcludePath)
+				? rawExcludePath
+				: join(workingDirectory, rawExcludePath);
+
+			mkdirSync(dirname(excludePath), { recursive: true });
+			const existing = existsSync(excludePath)
+				? readFileSync(excludePath, "utf-8")
+				: "";
+			if (existing.split(/\r?\n/).includes(".agents/")) {
+				return;
+			}
+
+			const prefix =
+				existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+			appendFileSync(excludePath, `${prefix}.agents/\n`);
+		} catch {
+			// Non-git chat workspaces and restricted git metadata are fine; cleanup
+			// still removes staged symlinks, and the exclude is only for git hygiene.
+		}
 	}
 
 	private getCodexRepoLocalSkillRoots(): string[] {
