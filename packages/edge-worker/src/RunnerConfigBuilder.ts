@@ -142,7 +142,8 @@ export interface IssueRunnerConfigInput {
 	/**
 	 * Allow-list of skill names enabled for the session (after scope filtering),
 	 * or `"all"` to enable every discovered skill, or `undefined` to defer to
-	 * provider defaults. Only the Claude runner respects this today.
+	 * provider defaults. Claude passes this to the SDK directly; Codex uses it
+	 * to stage the same scoped skills into its native `.agents/skills` layout.
 	 */
 	skills?: string[] | "all";
 	/** SDK sandbox settings (enabled, network proxy ports) for Claude runner */
@@ -389,13 +390,13 @@ export class RunnerConfigBuilder {
 				this.runnerSelector.getDefaultFallbackModelForRunner(runnerType),
 			logger: log,
 			hooks,
-			// Plugins providing skills (Claude runner only)
-			...(runnerType === "claude" &&
+			// Plugins providing managed skills.
+			...(this.runnerSupportsManagedSkills(runnerType) &&
 				input.plugins?.length && { plugins: input.plugins }),
-			// Skill scope allow-list (Claude runner only). Passed through to the
-			// SDK's `query()` `skills` option so unlisted skills are hidden from
-			// the model.
-			...(runnerType === "claude" &&
+			// Skill scope allow-list. Claude passes this through to the SDK's
+			// `query()` `skills` option; Codex uses it to stage only allowed skill
+			// directories into the discovery layout for this session.
+			...(this.runnerSupportsManagedSkills(runnerType) &&
 				input.skills !== undefined && { skills: input.skills }),
 			// SDK sandbox settings (Claude runner only):
 			// - Merge base settings with per-session filesystem.allowWrite (worktree path)
@@ -453,6 +454,10 @@ export class RunnerConfigBuilder {
 		log: ILogger,
 	): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
 		return buildStopHook(log);
+	}
+
+	private runnerSupportsManagedSkills(runnerType: RunnerType): boolean {
+		return runnerType === "claude" || runnerType === "codex";
 	}
 
 	/**

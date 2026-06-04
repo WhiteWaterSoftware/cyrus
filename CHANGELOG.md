@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - Git commands (`add`, `commit`, `merge`, etc.) no longer fail with "Operation not permitted" in multi-repo workspaces when running under a sandboxed agent (e.g. the Codex runner). Each repository's git metadata directory is now granted write access, not just the workspace container.
+- Codex sessions can now use Cyrus-managed custom skills synced from the hosted app. Scoped managed skills are staged into Codex's native skill discovery layout for each session and cleaned up afterward. ([CYPACK-1287](https://linear.app/ceedar/issue/CYPACK-1287/make-our-managed-skills-available-to-the-codex-runner), PR pending)
 
 
 ## [0.2.62] - 2026-06-02
