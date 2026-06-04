@@ -82,6 +82,7 @@ export const LINEAR_DEFAULT_ALLOWED_TOOLS = [
 
 	// Workflow orchestration
 	"Workflow",
+	"RemoteTrigger",
 
 	// Workspace MCP servers — explicit, no implicit appending. Linear
 	// sessions include `mcp__slack` so Cyrus can post status updates and
@@ -133,6 +134,7 @@ export const SLACK_DEFAULT_ALLOWED_TOOLS = [
 	"Monitor",
 	"Skill",
 	"ToolSearch",
+	"RemoteTrigger",
 
 	// Workspace MCP servers Slack chat sessions need
 	"mcp__linear",
@@ -207,6 +209,7 @@ export const GITHUB_DEFAULT_ALLOWED_TOOLS = [
 
 	// Workflow orchestration
 	"Workflow",
+	"RemoteTrigger",
 
 	// Workspace MCP servers GitHub sessions need
 	"mcp__linear",

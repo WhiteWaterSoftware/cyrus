@@ -74,6 +74,9 @@ export const availableTools = [
 
 	// Workflow orchestration
 	"Workflow",
+
+	// Remote triggering
+	"RemoteTrigger",
 ] as const;
 
 export type ToolName = (typeof availableTools)[number];
