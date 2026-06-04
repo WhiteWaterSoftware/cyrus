@@ -143,7 +143,7 @@ export interface IssueRunnerConfigInput {
 	 * Allow-list of skill names enabled for the session (after scope filtering),
 	 * or `"all"` to enable every discovered skill, or `undefined` to defer to
 	 * provider defaults. Claude passes this to the SDK directly; Codex uses it
-	 * to stage the same scoped skills into its native `.agents/skills` layout.
+	 * to stage the same scoped skills into its native discovery layout.
 	 */
 	skills?: string[] | "all";
 	/** SDK sandbox settings (enabled, network proxy ports) for Claude runner */
@@ -377,6 +377,9 @@ export class RunnerConfigBuilder {
 			...(additionalDirectories.length > 0 && { additionalDirectories }),
 			workspaceName: input.session.issue?.identifier || input.session.issueId,
 			cyrusHome: input.cyrusHome,
+			...(runnerType === "codex" && {
+				codexHome: join(input.cyrusHome, "codex-sessions", input.sessionId),
+			}),
 			mcpConfigPath,
 			mcpConfig,
 			appendSystemPrompt: appendCloudRuntimeAddendum(
@@ -395,7 +398,7 @@ export class RunnerConfigBuilder {
 				input.plugins?.length && { plugins: input.plugins }),
 			// Skill scope allow-list. Claude passes this through to the SDK's
 			// `query()` `skills` option; Codex uses it to stage only allowed skill
-			// directories into the discovery layout for this session.
+			// directories into the session Codex home for discovery.
 			...(this.runnerSupportsManagedSkills(runnerType) &&
 				input.skills !== undefined && { skills: input.skills }),
 			// SDK sandbox settings (Claude runner only):

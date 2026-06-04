@@ -22,7 +22,7 @@
 
 ### Codex Skill Discovery
 - [x] Seeded managed user skill at `user-skills-plugin/skills/cypack-1287-canary/SKILL.md`
-- [x] Built `CodexRunner.prepareManagedSkillsForCodex()` staged the skill into the Codex worktree
+- [x] Built `CodexRunner.prepareManagedSkillsForCodex()` staged the skill into the session Codex home
 - [x] `codex debug prompt-input` listed `cypack-1287-canary` in the available-skills block with the expected `CANARY_SKILL_AVAILABLE` description
 - [x] Staged skill directory was removed after the deterministic probe
 
@@ -69,4 +69,4 @@ The rendered Codex prompt included:
 
 The F1 pipeline validated issue creation, routing, worktree creation, Codex runner selection, and managed skill resolution. The live model turn did not complete because Codex exec exited with code 1 in this local F1 environment, so the end-to-end response assertion remains blocked.
 
-The deterministic Codex prompt-input probe verifies the relevant discovery contract without a model call: after the runner stages the scoped managed skill, Codex includes it as the unqualified local skill name available to the session.
+The deterministic Codex prompt-input probe verifies the relevant discovery contract without a model call: after the runner stages the scoped managed skill under the session `CODEX_HOME/skills` directory, Codex includes it as the unqualified local skill name available to the session.

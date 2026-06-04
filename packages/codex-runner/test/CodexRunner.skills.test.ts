@@ -39,9 +39,10 @@ describe("CodexRunner managed skills", () => {
 		return dir;
 	}
 
-	it("stages allowed managed and repo-local skills into Codex's .agents/skills layout", () => {
+	it("stages allowed managed and repo-local skills into the session Codex home", () => {
 		const root = makeTempDir();
 		const worktree = join(root, "worktree");
+		const codexHome = join(root, "codex-home");
 		const userPlugin = join(root, "user-plugin");
 		const internalPlugin = join(root, "internal-plugin");
 		mkdirSync(worktree, { recursive: true });
@@ -52,6 +53,7 @@ describe("CodexRunner managed skills", () => {
 		const runner = new CodexRunner({
 			workingDirectory: worktree,
 			cyrusHome: root,
+			codexHome,
 			plugins: [
 				{ type: "local", path: userPlugin },
 				{ type: "local", path: internalPlugin },
@@ -63,8 +65,8 @@ describe("CodexRunner managed skills", () => {
 			runner as unknown as { prepareManagedSkillsForCodex: () => void }
 		).prepareManagedSkillsForCodex();
 
-		const stagedUserSkill = join(worktree, ".agents", "skills", "custom-user");
-		const stagedRepoSkill = join(worktree, ".agents", "skills", "repo-local");
+		const stagedUserSkill = join(codexHome, "skills", "custom-user");
+		const stagedRepoSkill = join(codexHome, "skills", "repo-local");
 		expect(lstatSync(stagedUserSkill).isDirectory()).toBe(true);
 		expect(readFileSync(join(stagedUserSkill, "SKILL.md"), "utf-8")).toContain(
 			"name: custom-user",
@@ -73,9 +75,7 @@ describe("CodexRunner managed skills", () => {
 		expect(readFileSync(join(stagedRepoSkill, "SKILL.md"), "utf-8")).toContain(
 			"name: repo-local",
 		);
-		expect(
-			existsSync(join(worktree, ".agents", "skills", "implementation")),
-		).toBe(false);
+		expect(existsSync(join(codexHome, "skills", "implementation"))).toBe(false);
 
 		(
 			runner as unknown as { cleanupRuntimeState: () => void }
@@ -87,8 +87,9 @@ describe("CodexRunner managed skills", () => {
 	it("does not overwrite an existing Codex skill with the same name", () => {
 		const root = makeTempDir();
 		const worktree = join(root, "worktree");
+		const codexHome = join(root, "codex-home");
 		const userPlugin = join(root, "user-plugin");
-		mkdirSync(join(worktree, ".agents", "skills", "custom-user"), {
+		mkdirSync(join(codexHome, "skills", "custom-user"), {
 			recursive: true,
 		});
 		writeSkill(join(userPlugin, "skills"), "custom-user");
@@ -97,6 +98,7 @@ describe("CodexRunner managed skills", () => {
 		const runner = new CodexRunner({
 			workingDirectory: worktree,
 			cyrusHome: root,
+			codexHome,
 			plugins: [{ type: "local", path: userPlugin }],
 			skills: ["custom-user"],
 		});
@@ -105,7 +107,7 @@ describe("CodexRunner managed skills", () => {
 			runner as unknown as { prepareManagedSkillsForCodex: () => void }
 		).prepareManagedSkillsForCodex();
 
-		const existingSkill = join(worktree, ".agents", "skills", "custom-user");
+		const existingSkill = join(codexHome, "skills", "custom-user");
 		expect(lstatSync(existingSkill).isDirectory()).toBe(true);
 		expect(warn).toHaveBeenCalledWith(
 			expect.stringContaining("Skipping managed skill 'custom-user'"),

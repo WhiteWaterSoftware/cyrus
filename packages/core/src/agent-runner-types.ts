@@ -469,7 +469,7 @@ export interface AgentRunnerConfig {
 	 *
 	 * Used to enforce per-skill scope (repository / Linear team / Linear label).
 	 * Claude passes this to its SDK; Codex uses it to stage only allowed skills
-	 * into its native `.agents/skills` discovery layout.
+	 * into its native skill discovery layout.
 	 */
 	skills?: string[] | "all";
 	/**

@@ -73,5 +73,6 @@ describe("RunnerConfigBuilder Codex managed skills", () => {
 		expect(runnerType).toBe("codex");
 		expect(config.plugins).toEqual(plugins);
 		expect(config.skills).toEqual(["custom-user"]);
+		expect(config.codexHome).toBe("/tmp/cyrus-home/codex-sessions/sess-1");
 	});
 });

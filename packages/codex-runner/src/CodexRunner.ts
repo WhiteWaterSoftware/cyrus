@@ -635,17 +635,15 @@ export class CodexRunner extends EventEmitter implements IAgentRunner {
 	private prepareManagedSkillsForCodex(): void {
 		this.cleanupStagedSkills();
 
-		const workingDirectory = this.config.workingDirectory;
-		if (!workingDirectory) {
-			return;
-		}
-
 		const skillSources = this.discoverCodexSkillSources();
 		if (skillSources.length === 0) {
 			return;
 		}
 
-		const skillsRoot = join(workingDirectory, ".agents", "skills");
+		const skillsRoot = this.resolveManagedSkillsRoot();
+		if (!skillsRoot) {
+			return;
+		}
 		mkdirSync(skillsRoot, { recursive: true });
 
 		for (const source of skillSources) {
@@ -695,6 +693,18 @@ export class CodexRunner extends EventEmitter implements IAgentRunner {
 		}
 
 		return sources;
+	}
+
+	private resolveManagedSkillsRoot(): string | undefined {
+		if (this.config.codexHome) {
+			return join(this.resolveCodexHome(), "skills");
+		}
+
+		const workingDirectory = this.config.workingDirectory;
+		if (!workingDirectory) {
+			return undefined;
+		}
+		return join(workingDirectory, ".agents", "skills");
 	}
 
 	private getCodexRepoLocalSkillRoots(): string[] {
