@@ -166,6 +166,12 @@ import {
 } from "./RepositoryRouter.js";
 import { RunnerConfigBuilder } from "./RunnerConfigBuilder.js";
 import { RunnerSelectionService } from "./RunnerSelectionService.js";
+import {
+	type QueuedJob,
+	type QueuedJobInitArgsSnapshot,
+	type QueuedJobPriority,
+	SessionQueueManager,
+} from "./SessionQueueManager.js";
 import { SharedApplicationServer } from "./SharedApplicationServer.js";
 import {
 	type SkillSessionContext,
@@ -275,6 +281,14 @@ export class EdgeWorker extends EventEmitter {
 	private processedIssueUpdateKeys = new Set<string>();
 
 	/**
+	 * Concurrency gate + persistent FIFO-with-priority queue for new
+	 * delegations. When `getActiveSessionCount()` is already at
+	 * `maxConcurrentSessions`, new agentSessionCreated webhooks land here
+	 * instead of spawning a runner. Drained on `sessionCompleted`.
+	 */
+	private sessionQueueManager: SessionQueueManager;
+
+	/**
 	 * Sessions parked due to blocked-by dependencies.
 	 * Key: Linear issue ID (the blocked issue)
 	 * Value: All data needed to replay initializeAgentRunner when unblocked
@@ -379,6 +393,23 @@ export class EdgeWorker extends EventEmitter {
 
 		// Initialize global session registry (centralized session storage)
 		this.globalSessionRegistry = new GlobalSessionRegistry();
+
+		// Session queue: gates new delegations when active >= maxConcurrentSessions.
+		// Subscribe to `sessionCompleted` for the drain trigger — every time a
+		// session reaches Complete/Error the registry emits this event and we try
+		// to pop the next queued job. Subscribed here in the constructor so the
+		// listener is in place before `start()` does the boot-time drain.
+		this.sessionQueueManager = new SessionQueueManager({
+			maxConcurrentSessions: this.config.maxConcurrentSessions ?? 1,
+			queueDir: this.cyrusHome,
+			logger: createLogger({ component: "SessionQueueManager" }),
+		});
+		this.globalSessionRegistry.on("sessionCompleted", () => {
+			// Fire-and-forget: drain failures are logged inside maybeDrainQueue.
+			// We don't await here because the registry's emit chain shouldn't
+			// block on a potentially long-running initializeAgentRunner call.
+			void this.maybeDrainQueue();
+		});
 
 		// Initialize repository router with dependencies
 		const repositoryRouterDeps: RepositoryRouterDeps = {
@@ -624,6 +655,48 @@ export class EdgeWorker extends EventEmitter {
 		// Load persisted state for each repository
 		await this.loadPersistedState();
 
+		// Reconcile-on-boot for the delegation queue:
+		//   1. Load queue.json (durable record of jobs that hadn't started).
+		//   2. Drop any entry whose agentSession is already terminal in the
+		//      registry — that means the webhook + completion both arrived
+		//      and we'd be double-spawning on drain.
+		//   3. Drain head-of-queue once if we're below the concurrency cap so
+		//      a runner that booted with idle slots picks up immediately.
+		//
+		// We do NOT call Linear here to verify each queued issue is still
+		// assigned to us. The local queue file is the durable source for
+		// jobs we acked; unassignment between shutdown and boot is rare and
+		// is handled idempotently by `handleIssueUnassignedWebhook` once
+		// Linear redrives. Trying to reconcile against Linear's full
+		// assignment list on every boot would add a failure mode (Linear
+		// 5xx) for a real but small problem and is left to HALO-299's
+		// reliable-reset work.
+		try {
+			this.sessionQueueManager.load();
+			for (const job of this.sessionQueueManager.getAll()) {
+				const existing = this.globalSessionRegistry.getSession(
+					job.agentSessionId,
+				);
+				if (
+					existing &&
+					(existing.status === "complete" ||
+						existing.status === "error" ||
+						existing.status === "stale")
+				) {
+					this.sessionQueueManager.dropByAgentSessionId(
+						job.agentSessionId,
+						`stale-on-boot (registry status=${existing.status})`,
+					);
+				}
+			}
+			await this.maybeDrainQueue();
+		} catch (err) {
+			this.logger.error(
+				"Failed to reconcile session queue on boot — runner will continue without drain",
+				err instanceof Error ? err : new Error(String(err)),
+			);
+		}
+
 		// Pre-warm the 30 most recent Claude sessions in the background
 		// so their first query after restart has near-zero cold-start latency.
 		// Disabled by default; opt in with CYRUS_ENABLE_WARM_SESSIONS=1.
@@ -866,7 +939,21 @@ export class EdgeWorker extends EventEmitter {
 
 		fastify.get("/status", async (_request, reply) => {
 			const status = this.computeStatus();
-			return reply.status(200).send({ status });
+			// Surface the queue so the ALB health check + operators can see
+			// at a glance whether a backlog is building up. The summary
+			// intentionally omits `initArgs` (it carries the full webhook
+			// payload, which is fine on disk but noisy over HTTP).
+			return reply.status(200).send({
+				status,
+				concurrency: {
+					active: this.getActiveSessionCount(),
+					max: this.sessionQueueManager.getMaxConcurrentSessions(),
+				},
+				queue: {
+					depth: this.sessionQueueManager.getDepth(),
+					jobs: this.sessionQueueManager.getSummary(),
+				},
+			});
 		});
 
 		this.logger.info("✅ Status endpoint registered");
@@ -3331,6 +3418,13 @@ ${taskSection}`;
 
 		const issueId = message.workItemId;
 
+		// Cancel any queued delegation for the issue too — a Done/Canceled
+		// issue shouldn't spawn a worktree the next time a slot frees up.
+		this.sessionQueueManager.dropByIssueId(
+			issueId,
+			`issue ${message.workItemIdentifier} reached terminal state`,
+		);
+
 		// Stop all active sessions for this issue
 		const sessions = this.agentSessionManager.getSessionsByIssueId(issueId);
 		for (const session of sessions) {
@@ -3392,6 +3486,17 @@ ${taskSection}`;
 		}
 
 		const issueId = webhook.notification.issue.id;
+
+		// Drop any queued delegation for this issue — an unassign should
+		// cancel a pending slot the same way it cancels a running session.
+		// Without this, unassigning a queued issue would leave its entry in
+		// place and eventually spawn a worktree for an issue the operator
+		// already detached from us. Idempotent: dropByIssueId is a no-op when
+		// nothing matches.
+		this.sessionQueueManager.dropByIssueId(
+			issueId,
+			`issue ${webhook.notification.issue.identifier} unassigned`,
+		);
 
 		// Get cached repository, with fallback to searching sessions
 		let repository = this.getCachedRepository(issueId);
@@ -3927,6 +4032,204 @@ ${taskSection}`;
 		}
 	}
 
+	// ============================================================================
+	// SESSION QUEUE — concurrency gate
+	// ============================================================================
+
+	/**
+	 * Count non-terminal sessions in the registry. Used for the concurrency
+	 * gate and for boot-time drain decisions. Linear's AgentSessionStatus has
+	 * three terminal values — `complete`, `error`, `stale` — anything else
+	 * (active, pending, awaitingInput) means a runner is still attached or
+	 * the session is waiting on a user, so it owns a slot.
+	 */
+	private getActiveSessionCount(): number {
+		return this.globalSessionRegistry
+			.getAllSessions()
+			.filter(
+				(s) =>
+					s.status !== "complete" &&
+					s.status !== "error" &&
+					s.status !== "stale",
+			).length;
+	}
+
+	/**
+	 * Decide the queue priority of a new delegation.
+	 *
+	 * `land` jumps ahead of `feature` at enqueue time — the auto-land flow
+	 * needs to take an approved PR over the finish line ahead of new feature
+	 * work. Detection wants to read the issue's labels (or a guidance hint)
+	 * to spot the auto-land trigger, but `agentSession.issue` doesn't carry
+	 * labels in the webhook payload and a Linear API roundtrip on every
+	 * delegation is the wrong tradeoff for V1 — for now every job is
+	 * `feature` and the ordering machinery sits idle. HALO-301 plugs in
+	 * label-based detection when wiring the auto-land workflow.
+	 */
+	private detectJobPriority(
+		_agentSession: AgentSessionCreatedWebhook["agentSession"],
+	): QueuedJobPriority {
+		return "feature";
+	}
+
+	/**
+	 * If we're at the concurrency cap, persist the delegation to the queue
+	 * file, ack the position to the Linear agent session, and return true so
+	 * the caller skips `initializeAgentRunner`. Returns false when below cap
+	 * (caller should proceed normally).
+	 *
+	 * `baseBranchOverrides` is a `Map<string,string>` in memory but JSON.
+	 * `Map`s don't round-trip — convert to a plain record on enqueue and
+	 * back to a `Map` on pop.
+	 */
+	private async maybeEnqueueDelegation(args: {
+		agentSession: AgentSessionCreatedWebhook["agentSession"];
+		repositories: RepositoryConfig[];
+		linearWorkspaceId: string;
+		guidance?: AgentSessionCreatedWebhook["guidance"];
+		commentBody?: string | null;
+		baseBranchOverrides?: Map<string, string>;
+		routingMethod?: string;
+		log: ILogger;
+	}): Promise<boolean> {
+		const activeCount = this.getActiveSessionCount();
+		if (!this.sessionQueueManager.shouldEnqueue(activeCount)) {
+			return false;
+		}
+
+		if (!args.agentSession.issue) {
+			args.log.warn(
+				"Concurrency gate hit but agentSession has no issue — falling through to runner",
+			);
+			return false;
+		}
+
+		const snapshot: QueuedJobInitArgsSnapshot = {
+			agentSession: args.agentSession,
+			repositoryIds: args.repositories.map((r) => r.id),
+			linearWorkspaceId: args.linearWorkspaceId,
+			guidance: args.guidance,
+			commentBody: args.commentBody ?? null,
+			baseBranchOverrides: args.baseBranchOverrides
+				? Object.fromEntries(args.baseBranchOverrides.entries())
+				: undefined,
+			routingMethod: args.routingMethod,
+		};
+
+		const job: QueuedJob = {
+			agentSessionId: args.agentSession.id,
+			issueId: args.agentSession.issue.id,
+			issueIdentifier: args.agentSession.issue.identifier,
+			priority: this.detectJobPriority(args.agentSession),
+			enqueuedAt: Date.now(),
+			initArgs: snapshot,
+		};
+
+		const position = this.sessionQueueManager.enqueue(job);
+		const cap = this.sessionQueueManager.getMaxConcurrentSessions();
+
+		try {
+			await this.activityPoster.postThoughtActivity(
+				args.agentSession.id,
+				args.linearWorkspaceId,
+				`Queued at position ${position} (${activeCount}/${cap} session${cap === 1 ? "" : "s"} active). I'll pick this up automatically when a slot frees.`,
+			);
+		} catch (err) {
+			// Ack failure isn't queue-fatal — log and move on so the job still
+			// runs when its turn comes.
+			args.log.warn(
+				`Failed to post queue-position ack for ${job.issueIdentifier}`,
+				err instanceof Error ? err : new Error(String(err)),
+			);
+		}
+
+		args.log.info(
+			`Delegation ${job.issueIdentifier} queued at position ${position} (active=${activeCount}/${cap}, depth=${this.sessionQueueManager.getDepth()})`,
+		);
+		return true;
+	}
+
+	/**
+	 * Drain head-of-queue if we're below the cap. Idempotent — safe to call
+	 * after every `sessionCompleted` and once on boot. Pops at most ONE job
+	 * per call because the registry will fire `sessionCompleted` for each
+	 * finished session in turn, and a runaway drain loop (e.g. spawning N
+	 * jobs at once on a misconfigured cap) would defeat the whole point of
+	 * the gate.
+	 */
+	private async maybeDrainQueue(): Promise<void> {
+		if (this.sessionQueueManager.getDepth() === 0) return;
+		const activeCount = this.getActiveSessionCount();
+		if (activeCount >= this.sessionQueueManager.getMaxConcurrentSessions()) {
+			return;
+		}
+
+		const job = this.sessionQueueManager.popNext();
+		if (!job) return;
+
+		this.logger.info(
+			`Draining queued ${job.issueIdentifier} (active=${activeCount}/${this.sessionQueueManager.getMaxConcurrentSessions()}, remaining=${this.sessionQueueManager.getDepth()})`,
+		);
+
+		// Resolve repository configs from snapshot IDs. A repo could have been
+		// removed from config between enqueue and pop — surface that loudly
+		// rather than silently dropping the job.
+		const repos: RepositoryConfig[] = [];
+		for (const id of job.initArgs.repositoryIds) {
+			const repo = this.repositories.get(id);
+			if (repo) {
+				repos.push(repo);
+			} else {
+				this.logger.warn(
+					`Queued ${job.issueIdentifier} references missing repo id="${id}" — skipping that entry`,
+				);
+			}
+		}
+		if (repos.length === 0) {
+			this.logger.error(
+				`Queued ${job.issueIdentifier} had no resolvable repositories — dropping`,
+			);
+			return;
+		}
+
+		const baseBranchOverrides = job.initArgs.baseBranchOverrides
+			? new Map(Object.entries(job.initArgs.baseBranchOverrides))
+			: undefined;
+
+		try {
+			// Post a "now starting" thought so the Linear thread shows the
+			// transition. Non-fatal if it fails (same posture as the ack).
+			await this.activityPoster
+				.postThoughtActivity(
+					job.agentSessionId,
+					job.initArgs.linearWorkspaceId,
+					`Starting work — slot freed up.`,
+				)
+				.catch((err) => {
+					this.logger.warn(
+						`Failed to post drain-start thought for ${job.issueIdentifier}`,
+						err instanceof Error ? err : new Error(String(err)),
+					);
+				});
+
+			await this.initializeAgentRunner(
+				job.initArgs.agentSession as AgentSessionCreatedWebhook["agentSession"],
+				repos,
+				job.initArgs.linearWorkspaceId,
+				job.initArgs.guidance as AgentSessionCreatedWebhook["guidance"],
+				job.initArgs.commentBody,
+				baseBranchOverrides,
+				job.initArgs.routingMethod,
+			);
+		} catch (err) {
+			this.logger.error(
+				`Failed to start queued ${job.issueIdentifier} — the job is lost from the queue. ` +
+					`Re-assign the issue in Linear to retry.`,
+				err instanceof Error ? err : new Error(String(err)),
+			);
+		}
+	}
+
 	private buildIssueUpdatePrompt(
 		issueIdentifier: string,
 		issueData: {
@@ -4294,6 +4597,23 @@ ${taskSection}`;
 			);
 			return;
 		}
+
+		// Concurrency gate — if `maxConcurrentSessions` slots are already in
+		// use, queue this delegation instead of spawning a runner. We count
+		// AFTER the blocked-by check so parked sessions don't consume a slot
+		// (they aren't running anything yet). Drain happens on the registry's
+		// `sessionCompleted` event wired in the constructor.
+		const enqueued = await this.maybeEnqueueDelegation({
+			agentSession,
+			repositories,
+			linearWorkspaceId,
+			guidance,
+			commentBody,
+			baseBranchOverrides,
+			routingMethod,
+			log,
+		});
+		if (enqueued) return;
 
 		// Initialize agent runner using shared logic (pass full repositories array)
 		await this.initializeAgentRunner(

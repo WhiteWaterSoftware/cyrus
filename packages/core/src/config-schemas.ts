@@ -480,6 +480,19 @@ export const EdgeConfigSchema = z.object({
 	 * all agent network traffic through it for inspection and filtering.
 	 */
 	sandbox: SandboxConfigSchema.optional(),
+
+	/**
+	 * Cap on concurrently-running agent sessions across all repositories.
+	 * Defaults to 1 — self-hosted runners share a single Docker dev stack
+	 * (Postgres / Mailpit / LocalStack on fixed host ports), so two worktree
+	 * sessions started at once collide on those ports. When an assignment
+	 * arrives while N sessions are already active, EdgeWorker enqueues the
+	 * job to `${cyrusHome}/queue.json` and acks the queue position back to
+	 * the issue tracker; on session completion it pops the next one.
+	 * Operators on a per-worktree-isolated Docker stack can raise this.
+	 * Min 1. Env override: CYRUS_MAX_CONCURRENT_SESSIONS.
+	 */
+	maxConcurrentSessions: z.number().int().min(1).optional(),
 });
 
 /**

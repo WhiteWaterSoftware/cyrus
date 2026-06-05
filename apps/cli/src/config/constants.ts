@@ -20,3 +20,19 @@ export function parsePort(
 		? defaultPort
 		: parsed;
 }
+
+/**
+ * Resolve maxConcurrentSessions from env (string) and config (number),
+ * floored at 1. Invalid env values silently fall back to the config value
+ * so a typo in halo.env can't deadlock the runner.
+ */
+export function parseMaxConcurrent(
+	envValue: string | undefined,
+	configValue: number | undefined,
+): number | undefined {
+	if (envValue !== undefined && envValue.trim() !== "") {
+		const parsed = parseInt(envValue, 10);
+		if (!Number.isNaN(parsed) && parsed >= 1) return parsed;
+	}
+	return configValue;
+}

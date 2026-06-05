@@ -3,7 +3,11 @@ import type { EdgeWorkerConfig, Issue, RepositoryConfig } from "cyrus-core";
 import type { GitService, SharedApplicationServer } from "cyrus-edge-worker";
 import { EdgeWorker } from "cyrus-edge-worker";
 import { SlackEventTransport } from "cyrus-slack-event-transport";
-import { DEFAULT_SERVER_PORT, parsePort } from "../config/constants.js";
+import {
+	DEFAULT_SERVER_PORT,
+	parseMaxConcurrent,
+	parsePort,
+} from "../config/constants.js";
 import type { Workspace } from "../config/types.js";
 import type { ConfigService } from "./ConfigService.js";
 import type { Logger } from "./Logger.js";
@@ -241,6 +245,12 @@ export class WorkerService {
 			// User access control configuration
 			userAccessControl: edgeConfig.userAccessControl,
 			sandbox: edgeConfig.sandbox,
+			// Concurrency cap: env wins over config so an operator can adjust without
+			// editing config.json over SSM. Min 1 — enforced by the queue manager.
+			maxConcurrentSessions: parseMaxConcurrent(
+				process.env.CYRUS_MAX_CONCURRENT_SESSIONS,
+				edgeConfig.maxConcurrentSessions,
+			),
 			handlers: {
 				createWorkspace: async (
 					issue: Issue,

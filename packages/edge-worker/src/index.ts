@@ -42,6 +42,14 @@ export type {
 	IssueRunnerConfigInput,
 } from "./RunnerConfigBuilder.js";
 export { RunnerConfigBuilder } from "./RunnerConfigBuilder.js";
+export type {
+	QueuedJob,
+	QueuedJobInitArgsSnapshot,
+	QueuedJobPriority,
+	SessionQueueManagerEvents,
+	SessionQueueManagerOptions,
+} from "./SessionQueueManager.js";
+export { SessionQueueManager } from "./SessionQueueManager.js";
 export { SharedApplicationServer } from "./SharedApplicationServer.js";
 export { SkillsPluginResolver } from "./SkillsPluginResolver.js";
 export { SlackChatAdapter } from "./SlackChatAdapter.js";
