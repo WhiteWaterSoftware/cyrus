@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- Codex sessions can now respond to comments added while Codex is mid-task without throwing away its in-progress work. When the experimental Codex app-server backend is enabled (set `"codexUseAppServer": true` in `config.json`, or `CODEX_USE_APP_SERVER=1`), a follow-up comment is woven into Codex's current turn instead of aborting and restarting it — matching how the Claude runner handles mid-task comments.
+- Codex sessions can now respond to comments added while Codex is mid-task without throwing away its in-progress work. When the experimental Codex app-server backend is enabled (set `"codexUseAppServer": true` in `config.json`, or `CODEX_USE_APP_SERVER=1`), a follow-up comment is woven into Codex's current turn instead of aborting and restarting it — matching how the Claude runner handles mid-task comments. ([#1293](https://github.com/cyrusagents/cyrus/pull/1293))
 
 ### Changed
 - Codex sessions now default to `gpt-5.5`, and Linear model labels such as `gpt-5.5` are recognized as Codex model overrides alongside the existing `*-codex` labels. ([CYPACK-1282](https://linear.app/ceedar/issue/CYPACK-1282), [#1288](https://github.com/cyrusagents/cyrus/pull/1288))
