@@ -353,6 +353,15 @@ export const EdgeConfigSchema = z.object({
 	/** Default Codex model to use across all repositories (e.g., "gpt-5.5", "gpt-5.4", "gpt-5.3-codex") */
 	codexDefaultModel: z.string().optional(),
 
+	/**
+	 * Drive Codex via the experimental `codex app-server` JSON-RPC protocol
+	 * instead of `codex exec`. The app-server backend supports streaming input:
+	 * comments added to an issue while Codex is mid-turn are injected into the
+	 * active turn (`turn/steer`) instead of aborting and restarting it. Defaults
+	 * to false. May also be enabled per-process via `CODEX_USE_APP_SERVER=1`.
+	 */
+	codexUseAppServer: z.boolean().optional(),
+
 	/** Default Cursor model to use across all repositories (e.g., "composer-2", "gpt-5.4") */
 	cursorDefaultModel: z.string().optional(),
 

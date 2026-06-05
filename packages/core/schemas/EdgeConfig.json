@@ -533,6 +533,9 @@
 		"codexDefaultModel": {
 			"type": "string"
 		},
+		"codexUseAppServer": {
+			"type": "boolean"
+		},
 		"cursorDefaultModel": {
 			"type": "string"
 		},

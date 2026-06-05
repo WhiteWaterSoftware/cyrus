@@ -55,6 +55,16 @@ export interface CodexRunnerConfig extends AgentRunnerConfig {
 	configOverrides?: CodexConfigOverrides;
 	/** JSON Schema for structured output (passed to thread.runStreamed as outputSchema) */
 	outputSchema?: unknown;
+	/**
+	 * Drive Codex via the persistent `codex app-server` JSON-RPC protocol instead
+	 * of `codex exec`. The app-server backend supports streaming input: comments
+	 * that arrive mid-turn are injected into the active turn via `turn/steer`
+	 * rather than aborting and restarting it.
+	 *
+	 * Defaults to `false` (exec backend). May also be enabled for local testing
+	 * via the `CODEX_USE_APP_SERVER=1` environment variable.
+	 */
+	useAppServer?: boolean;
 }
 
 /**

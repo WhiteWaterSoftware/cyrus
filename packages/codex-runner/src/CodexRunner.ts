@@ -1,586 +1,27 @@
-import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
+import type { IAgentRunner, IMessageFormatter, SDKMessage } from "cyrus-core";
+import { AppServerCodexBackend } from "./backend/AppServerCodexBackend.js";
 import {
-	appendFileSync,
-	type Dirent,
-	existsSync,
-	lstatSync,
-	mkdirSync,
-	readdirSync,
-	readFileSync,
-	rmSync,
-	symlinkSync,
-} from "node:fs";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative as pathRelative } from "node:path";
-import { cwd } from "node:process";
+	ExecCodexBackend,
+	normalizeExecEvent,
+} from "./backend/ExecCodexBackend.js";
 import type {
-	CommandExecutionItem,
-	FileChangeItem,
-	McpToolCallItem,
-	Thread,
-	ThreadItem,
-	ThreadOptions,
-	TodoListItem,
-	Usage,
-	WebSearchItem,
-} from "@openai/codex-sdk";
-import { Codex } from "@openai/codex-sdk";
-import type {
-	IAgentRunner,
-	IMessageFormatter,
-	McpServerConfig,
-	SDKAssistantMessage,
-	SDKMessage,
-	SDKResultMessage,
-	SDKUserMessage,
-} from "cyrus-core";
+	CodexBackend,
+	CodexUserInput,
+	ResolvedCodexConfig,
+} from "./backend/types.js";
+import { CodexEventMapper, type MapperContext } from "./CodexEventMapper.js";
+import { CodexSkillStager } from "./CodexSkillStager.js";
+import { CodexConfigBuilder } from "./config/CodexConfigBuilder.js";
+import { buildCodexMcpServersConfig } from "./config/mcpConfigTranslator.js";
 import { CodexMessageFormatter } from "./formatter.js";
 import type {
-	CodexConfigOverrides,
-	CodexConfigValue,
 	CodexJsonEvent,
 	CodexRunnerConfig,
 	CodexRunnerEvents,
 	CodexSessionInfo,
 } from "./types.js";
-
-type SDKSystemInitMessage = Extract<
-	SDKMessage,
-	{ type: "system"; subtype: "init" }
->;
-
-interface ParsedUsage {
-	inputTokens: number;
-	outputTokens: number;
-	cachedInputTokens: number;
-}
-
-type ToolInput = Record<string, unknown>;
-
-interface ToolProjection {
-	toolUseId: string;
-	toolName: string;
-	toolInput: ToolInput;
-	result: string;
-	isError: boolean;
-}
-
-interface McpAllowedToolsFilter {
-	allowAll: boolean;
-	tools: string[];
-}
-
-const DEFAULT_CODEX_MODEL = "gpt-5.5";
-const CODEX_MCP_DOCS_URL = "https://platform.openai.com/docs/docs-mcp";
-const CODEX_MCP_APPROVE_MODE = "approve";
-
-interface CodexSkillSource {
-	name: string;
-	path: string;
-}
-
-function toFiniteNumber(value: number | undefined): number {
-	return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function safeStringify(value: unknown): string {
-	try {
-		return JSON.stringify(value, null, 2);
-	} catch {
-		return String(value);
-	}
-}
-
-function createAssistantToolUseMessage(
-	toolUseId: string,
-	toolName: string,
-	toolInput: ToolInput,
-	messageId: string = crypto.randomUUID(),
-): SDKAssistantMessage["message"] {
-	const contentBlocks = [
-		{
-			type: "tool_use",
-			id: toolUseId,
-			name: toolName,
-			input: toolInput,
-		},
-	] as unknown as SDKAssistantMessage["message"]["content"];
-
-	return {
-		id: messageId,
-		type: "message",
-		role: "assistant",
-		content: contentBlocks,
-		model: DEFAULT_CODEX_MODEL,
-		stop_reason: null,
-		stop_sequence: null,
-		stop_details: null,
-		usage: {
-			input_tokens: 0,
-			output_tokens: 0,
-			cache_creation_input_tokens: 0,
-			cache_read_input_tokens: 0,
-			output_tokens_details: null,
-			cache_creation: null,
-			inference_geo: null,
-			iterations: null,
-			server_tool_use: null,
-			service_tier: null,
-			speed: null,
-		},
-		container: null,
-		context_management: null,
-		diagnostics: null,
-	};
-}
-
-function createUserToolResultMessage(
-	toolUseId: string,
-	result: string,
-	isError: boolean,
-): SDKUserMessage["message"] {
-	const contentBlocks = [
-		{
-			type: "tool_result",
-			tool_use_id: toolUseId,
-			content: result,
-			is_error: isError,
-		},
-	] as unknown as SDKUserMessage["message"]["content"];
-
-	return {
-		role: "user",
-		content: contentBlocks,
-	};
-}
-
-function createAssistantBetaMessage(
-	content: string,
-	messageId: string = crypto.randomUUID(),
-): SDKAssistantMessage["message"] {
-	const contentBlocks = [
-		{ type: "text", text: content },
-	] as unknown as SDKAssistantMessage["message"]["content"];
-
-	return {
-		id: messageId,
-		type: "message",
-		role: "assistant",
-		content: contentBlocks,
-		model: DEFAULT_CODEX_MODEL,
-		stop_reason: null,
-		stop_sequence: null,
-		stop_details: null,
-		usage: {
-			input_tokens: 0,
-			output_tokens: 0,
-			cache_creation_input_tokens: 0,
-			cache_read_input_tokens: 0,
-			output_tokens_details: null,
-			cache_creation: null,
-			inference_geo: null,
-			iterations: null,
-			server_tool_use: null,
-			service_tier: null,
-			speed: null,
-		},
-		container: null,
-		context_management: null,
-		diagnostics: null,
-	};
-}
-
-function parseUsage(usage: Usage | null | undefined): ParsedUsage {
-	if (!usage) {
-		return {
-			inputTokens: 0,
-			outputTokens: 0,
-			cachedInputTokens: 0,
-		};
-	}
-
-	return {
-		inputTokens: toFiniteNumber(usage.input_tokens),
-		outputTokens: toFiniteNumber(usage.output_tokens),
-		cachedInputTokens: toFiniteNumber(usage.cached_input_tokens),
-	};
-}
-
-function createResultUsage(parsed: ParsedUsage): SDKResultMessage["usage"] {
-	return {
-		input_tokens: parsed.inputTokens,
-		output_tokens: parsed.outputTokens,
-		cache_creation_input_tokens: 0,
-		cache_read_input_tokens: parsed.cachedInputTokens,
-		output_tokens_details: { thinking_tokens: 0 },
-		cache_creation: {
-			ephemeral_1h_input_tokens: 0,
-			ephemeral_5m_input_tokens: 0,
-		},
-		inference_geo: "unknown",
-		iterations: [],
-		server_tool_use: {
-			web_fetch_requests: 0,
-			web_search_requests: 0,
-		},
-		service_tier: "standard",
-		speed: "standard",
-	};
-}
-
-function getDefaultReasoningEffortForModel(
-	model?: string,
-): CodexRunnerConfig["modelReasoningEffort"] | undefined {
-	// All gpt-5 variants (including plain "gpt-5") reject xhigh; pin to "high".
-	return /^gpt-5/i.test(model || "") ? "high" : undefined;
-}
-
-function normalizeError(error: unknown): string {
-	if (error instanceof Error) {
-		return error.message;
-	}
-	if (typeof error === "string") {
-		return error;
-	}
-	return "Codex execution failed";
-}
-
-function inferCommandToolName(command: string): string {
-	const normalized = command.toLowerCase();
-	if (/\brg\b|\bgrep\b/.test(normalized)) {
-		return "Grep";
-	}
-	if (/\bglob\.glob\b|\bfind\b.+\s-name\s/.test(normalized)) {
-		return "Glob";
-	}
-	if (/\bcat\b/.test(normalized) && !/>/.test(normalized)) {
-		return "Read";
-	}
-	if (
-		/<<\s*['"]?eof['"]?\s*>/i.test(command) ||
-		/\becho\b.+>/.test(normalized)
-	) {
-		return "Write";
-	}
-	return "Bash";
-}
-
-function normalizeFilePath(path: string, workingDirectory?: string): string {
-	if (!path) {
-		return path;
-	}
-
-	if (workingDirectory && path.startsWith(workingDirectory)) {
-		const relativePath = pathRelative(workingDirectory, path);
-		if (relativePath && relativePath !== ".") {
-			return relativePath;
-		}
-	}
-
-	return path;
-}
-
-function summarizeFileChanges(
-	item: FileChangeItem,
-	workingDirectory?: string,
-): string {
-	if (!item.changes.length) {
-		return item.status === "failed" ? "Patch failed" : "No file changes";
-	}
-
-	return item.changes
-		.map((change) => {
-			const filePath = normalizeFilePath(change.path, workingDirectory);
-			return `${change.kind} ${filePath}`;
-		})
-		.join("\n");
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-	if (value && typeof value === "object") {
-		return value as Record<string, unknown>;
-	}
-	return null;
-}
-
-function toMcpResultString(item: McpToolCallItem): string {
-	if (item.error?.message) {
-		return item.error.message;
-	}
-
-	const textBlocks: string[] = [];
-	for (const block of item.result?.content || []) {
-		const text = asRecord(block)?.text;
-		if (typeof text === "string" && text.trim().length > 0) {
-			textBlocks.push(text);
-		}
-	}
-
-	if (textBlocks.length > 0) {
-		return textBlocks.join("\n");
-	}
-
-	if (item.result?.structured_content !== undefined) {
-		return safeStringify(item.result.structured_content);
-	}
-
-	return item.status === "failed"
-		? "MCP tool call failed"
-		: "MCP tool call completed";
-}
-
-function normalizeMcpIdentifier(value: string): string {
-	const normalized = value
-		.toLowerCase()
-		.replace(/[^a-z0-9_]+/g, "_")
-		.replace(/^_+|_+$/g, "");
-	return normalized || "unknown";
-}
-
-function autoDetectMcpConfigPath(
-	workingDirectory?: string,
-): string | undefined {
-	if (!workingDirectory) {
-		return undefined;
-	}
-
-	const mcpPath = join(workingDirectory, ".mcp.json");
-	if (!existsSync(mcpPath)) {
-		return undefined;
-	}
-
-	try {
-		JSON.parse(readFileSync(mcpPath, "utf8"));
-		return mcpPath;
-	} catch {
-		console.warn(
-			`[CodexRunner] Found .mcp.json at ${mcpPath} but it is invalid JSON, skipping`,
-		);
-		return undefined;
-	}
-}
-
-function loadMcpConfigFromPaths(
-	configPaths: string | string[] | undefined,
-): Record<string, McpServerConfig> {
-	if (!configPaths) {
-		return {};
-	}
-
-	const paths = Array.isArray(configPaths) ? configPaths : [configPaths];
-	let mcpServers: Record<string, McpServerConfig> = {};
-
-	for (const configPath of paths) {
-		try {
-			const mcpConfigContent = readFileSync(configPath, "utf8");
-			const mcpConfig = JSON.parse(mcpConfigContent);
-			const servers =
-				mcpConfig &&
-				typeof mcpConfig === "object" &&
-				!Array.isArray(mcpConfig) &&
-				mcpConfig.mcpServers &&
-				typeof mcpConfig.mcpServers === "object" &&
-				!Array.isArray(mcpConfig.mcpServers)
-					? (mcpConfig.mcpServers as Record<string, McpServerConfig>)
-					: {};
-			mcpServers = { ...mcpServers, ...servers };
-			console.log(
-				`[CodexRunner] Loaded MCP config from ${configPath}: ${Object.keys(servers).join(", ")}`,
-			);
-		} catch (error) {
-			console.warn(
-				`[CodexRunner] Failed to load MCP config from ${configPath}: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-	}
-
-	return mcpServers;
-}
-
-function parseMcpAllowedTool(
-	toolPattern: string,
-): { serverName: string; toolName?: string } | null {
-	const trimmed = toolPattern.trim();
-	if (!trimmed.startsWith("mcp__")) {
-		return null;
-	}
-
-	const parts = trimmed.split("__");
-	const serverName = parts[1]?.trim();
-	if (!serverName) {
-		return null;
-	}
-
-	if (parts.length === 2) {
-		return { serverName };
-	}
-
-	const toolName = parts.slice(2).join("__").trim();
-	return toolName ? { serverName, toolName } : { serverName };
-}
-
-function buildMcpAllowedToolsFilters(
-	allowedTools: string[] | undefined,
-): Map<string, McpAllowedToolsFilter> {
-	const filters = new Map<string, McpAllowedToolsFilter>();
-	for (const allowedTool of allowedTools ?? []) {
-		const parsed = parseMcpAllowedTool(allowedTool);
-		if (!parsed) {
-			continue;
-		}
-
-		const filter = filters.get(parsed.serverName) ?? {
-			allowAll: false,
-			tools: [],
-		};
-
-		if (!parsed.toolName) {
-			filter.allowAll = true;
-			filter.tools = [];
-		} else if (!filter.allowAll && !filter.tools.includes(parsed.toolName)) {
-			filter.tools.push(parsed.toolName);
-		}
-
-		filters.set(parsed.serverName, filter);
-	}
-
-	return filters;
-}
-
-function normalizeMcpServerFilterName(serverName: string): string {
-	return serverName.replace(/[-_]+/g, "").toLowerCase();
-}
-
-function mergeMcpAllowedToolsFilters(
-	filters: McpAllowedToolsFilter[],
-): McpAllowedToolsFilter | undefined {
-	if (filters.length === 0) {
-		return undefined;
-	}
-
-	const merged: McpAllowedToolsFilter = {
-		allowAll: false,
-		tools: [],
-	};
-
-	for (const filter of filters) {
-		if (filter.allowAll) {
-			return { allowAll: true, tools: [] };
-		}
-
-		for (const tool of filter.tools) {
-			if (!merged.tools.includes(tool)) {
-				merged.tools.push(tool);
-			}
-		}
-	}
-
-	return merged;
-}
-
-function getMcpAllowedToolsFilter(
-	filters: Map<string, McpAllowedToolsFilter>,
-	serverName: string,
-): McpAllowedToolsFilter | undefined {
-	const matchingFilters: McpAllowedToolsFilter[] = [];
-	const exact = filters.get(serverName);
-	if (exact) {
-		matchingFilters.push(exact);
-	}
-
-	const normalizedServerName = normalizeMcpServerFilterName(serverName);
-	for (const [allowedServerName, filter] of filters.entries()) {
-		if (allowedServerName === serverName) {
-			continue;
-		}
-		if (
-			normalizeMcpServerFilterName(allowedServerName) === normalizedServerName
-		) {
-			matchingFilters.push(filter);
-		}
-	}
-
-	return mergeMcpAllowedToolsFilters(matchingFilters);
-}
-
-function applyCyrusMcpAllowedToolsSemantics(
-	mapped: CodexConfigOverrides,
-	allowedToolsFilter: McpAllowedToolsFilter,
-	options: { hasNativeToolFilter: boolean },
-): void {
-	const shouldGenerateToolFilter =
-		!allowedToolsFilter.allowAll &&
-		allowedToolsFilter.tools.length > 0 &&
-		!options.hasNativeToolFilter;
-
-	if (shouldGenerateToolFilter) {
-		mapped.enabled_tools = allowedToolsFilter.tools;
-	}
-
-	// Codex separates tool visibility (`enabled_tools`) from MCP approval. Cyrus
-	// allowedTools are already the operator's allow-list, so generated allowances
-	// must also be approved for non-interactive Codex exec runs.
-	if (!Object.hasOwn(mapped, "default_tools_approval_mode")) {
-		mapped.default_tools_approval_mode = CODEX_MCP_APPROVE_MODE;
-	}
-}
-
-function copyConfigString(
-	target: CodexConfigOverrides,
-	source: Record<string, unknown>,
-	key: string,
-): void {
-	if (typeof source[key] === "string") {
-		target[key] = source[key] as string;
-	}
-}
-
-function copyConfigNumber(
-	target: CodexConfigOverrides,
-	source: Record<string, unknown>,
-	key: string,
-): void {
-	if (typeof source[key] === "number") {
-		target[key] = source[key] as number;
-	}
-}
-
-function copyConfigBoolean(
-	target: CodexConfigOverrides,
-	source: Record<string, unknown>,
-	key: string,
-): void {
-	if (typeof source[key] === "boolean") {
-		target[key] = source[key] as boolean;
-	}
-}
-
-function copyConfigArray(
-	target: CodexConfigOverrides,
-	source: Record<string, unknown>,
-	key: string,
-): void {
-	if (Array.isArray(source[key])) {
-		target[key] = source[
-			key
-		] as CodexConfigOverrides[keyof CodexConfigOverrides];
-	}
-}
-
-function copyConfigObject(
-	target: CodexConfigOverrides,
-	source: Record<string, unknown>,
-	sourceKey: string,
-	targetKey: string = sourceKey,
-): void {
-	const value = source[sourceKey];
-	if (value && typeof value === "object" && !Array.isArray(value)) {
-		target[targetKey] =
-			value as CodexConfigOverrides[keyof CodexConfigOverrides];
-	}
-}
 
 export declare interface CodexRunner {
 	on<K extends keyof CodexRunnerEvents>(
@@ -594,35 +35,38 @@ export declare interface CodexRunner {
 }
 
 /**
- * Runner that adapts Codex SDK streaming output to Cyrus SDK message types.
+ * Adapts Codex to Cyrus's {@link IAgentRunner} contract.
+ *
+ * The runner is a thin orchestrator: it owns session lifecycle and delegates
+ * configuration assembly ({@link CodexConfigBuilder}), skill staging
+ * ({@link CodexSkillStager}), event→message mapping ({@link CodexEventMapper}),
+ * and transport ({@link CodexBackend}) to dedicated collaborators.
  */
 export class CodexRunner extends EventEmitter implements IAgentRunner {
-	readonly supportsStreamingInput = false;
+	readonly supportsStreamingInput: boolean;
 
 	private config: CodexRunnerConfig;
-	private sessionInfo: CodexSessionInfo | null = null;
-	private messages: SDKMessage[] = [];
 	private formatter: IMessageFormatter;
-	private hasInitMessage = false;
-	private pendingResultMessage: SDKResultMessage | null = null;
-	private lastAssistantText: string | null = null;
-	private lastUsage: ParsedUsage = {
-		inputTokens: 0,
-		outputTokens: 0,
-		cachedInputTokens: 0,
-	};
-	private errorMessages: string[] = [];
-	private startTimestampMs = 0;
+	private sessionInfo: CodexSessionInfo | null = null;
 	private wasStopped = false;
-	private abortController: AbortController | null = null;
-	private emittedToolUseIds: Set<string> = new Set();
-	private stagedSkillPaths: string[] = [];
-	private stagedSkillNames: string[] = [];
+
+	private readonly skillStager: CodexSkillStager;
+	private readonly mapper: CodexEventMapper;
+	private resolvedConfig: ResolvedCodexConfig | null = null;
+	private backend: CodexBackend | null = null;
 
 	constructor(config: CodexRunnerConfig) {
 		super();
 		this.config = config;
 		this.formatter = new CodexMessageFormatter();
+		this.skillStager = new CodexSkillStager({
+			workingDirectory: config.workingDirectory,
+			additionalDirectories: config.additionalDirectories,
+			skills: config.skills,
+			plugins: config.plugins,
+		});
+		this.mapper = new CodexEventMapper(this.buildMapperContext());
+		this.supportsStreamingInput = this.shouldUseAppServer();
 
 		if (config.onMessage) this.on("message", config.onMessage);
 		if (config.onError) this.on("error", config.onError);
@@ -637,12 +81,40 @@ export class CodexRunner extends EventEmitter implements IAgentRunner {
 		return this.startWithPrompt(null, initialPrompt);
 	}
 
-	addStreamMessage(_content: string): void {
-		throw new Error("CodexRunner does not support streaming input messages");
+	/**
+	 * Inject a mid-turn message. With the app-server backend this steers the
+	 * active turn (`turn/steer`) so in-flight work is preserved. With the exec
+	 * backend there is no input channel, so this throws (callers guard on
+	 * {@link supportsStreamingInput}).
+	 */
+	addStreamMessage(content: string): void {
+		const backend = this.backend;
+		if (!backend?.supportsSteer || !backend.steer) {
+			throw new Error("CodexRunner does not support streaming input messages");
+		}
+		if (!backend.isTurnActive()) {
+			// EdgeWorker only calls this while the runner is running (a turn is in
+			// flight); a between-turns comment is delivered as a fresh turn via the
+			// resume path instead.
+			throw new Error("Cannot stream message: no active Codex turn");
+		}
+		void backend.steer([{ type: "text", text: content }]).catch((error) => {
+			this.emit(
+				"error",
+				error instanceof Error ? error : new Error(String(error)),
+			);
+		});
 	}
 
 	completeStream(): void {
-		// No-op: CodexRunner does not support streaming input.
+		// No-op: each turn's input is delivered up front (or via steer); there is
+		// no open input stream to close.
+	}
+
+	isStreaming(): boolean {
+		return (
+			this.supportsStreamingInput && (this.backend?.isTurnActive() ?? false)
+		);
 	}
 
 	private async startWithPrompt(
@@ -659,36 +131,21 @@ export class CodexRunner extends EventEmitter implements IAgentRunner {
 			startedAt: new Date(),
 			isRunning: true,
 		};
-
-		this.messages = [];
-		this.hasInitMessage = false;
-		this.pendingResultMessage = null;
-		this.lastAssistantText = null;
-		this.lastUsage = {
-			inputTokens: 0,
-			outputTokens: 0,
-			cachedInputTokens: 0,
-		};
-		this.errorMessages = [];
 		this.wasStopped = false;
-		this.startTimestampMs = Date.now();
-		this.emittedToolUseIds.clear();
+		this.mapper.reset();
 
-		await this.resolveModelWithFallback();
-		this.prepareManagedSkillsForCodex();
+		const builder = new CodexConfigBuilder(this.config);
+		this.resolvedConfig = await builder.build();
+		this.skillStager.stage();
 
 		const prompt = (stringPrompt ?? streamingInitialPrompt ?? "").trim();
-		const threadOptions = this.buildThreadOptions();
-		const codex = this.createCodexClient();
-		const thread = this.config.resumeSessionId
-			? codex.resumeThread(this.config.resumeSessionId, threadOptions)
-			: codex.startThread(threadOptions);
-		const abortController = new AbortController();
-		this.abortController = abortController;
+		this.backend = this.createBackend();
+		this.backend.on("event", (event) => this.mapper.handle(event));
 
 		let caughtError: unknown;
 		try {
-			await this.runTurn(thread, prompt, abortController.signal);
+			await this.backend.open(this.resolvedConfig);
+			await this.backend.runTurn(this.toUserInput(prompt));
 		} catch (error) {
 			caughtError = error;
 		} finally {
@@ -698,705 +155,39 @@ export class CodexRunner extends EventEmitter implements IAgentRunner {
 		return this.sessionInfo;
 	}
 
-	/**
-	 * Check if the configured model is accessible via the OpenAI API.
-	 * If not, swap to the fallback model before starting the session.
-	 *
-	 * Skipped when:
-	 * - No OPENAI_API_KEY is set (Codex-native auth handles model access)
-	 * - The user has a ChatGPT subscription (`codex login status` reports "Logged in using ChatGPT")
-	 */
-	private async resolveModelWithFallback(): Promise<void> {
-		const model = this.config.model;
-		const fallback = this.config.fallbackModel;
-		if (!model || !fallback || fallback === model) return;
-
-		const apiKey = process.env.OPENAI_API_KEY;
-		if (!apiKey) return;
-
-		if (await this.hasCodexSubscription()) return;
-
-		const baseUrl = (
-			process.env.OPENAI_BASE_URL ||
-			process.env.OPENAI_API_BASE ||
-			"https://api.openai.com/v1"
-		).replace(/\/+$/, "");
-
-		try {
-			const response = await fetch(
-				`${baseUrl}/models/${encodeURIComponent(model)}`,
-				{
-					method: "GET",
-					headers: { Authorization: `Bearer ${apiKey}` },
-					signal: AbortSignal.timeout(10_000),
-				},
-			);
-			if (response.status === 404) {
-				console.log(
-					`[CodexRunner] Model "${model}" not found (404), falling back to "${fallback}"`,
-				);
-				this.config.model = fallback;
-			}
-		} catch {
-			// Network error or timeout — proceed with the original model
-			// and let the Codex SDK handle any downstream failure.
-		}
+	private toUserInput(prompt: string): CodexUserInput[] {
+		return prompt ? [{ type: "text", text: prompt }] : [];
 	}
 
-	/**
-	 * Check if the user has a ChatGPT/Codex subscription by running `codex login status`.
-	 * Returns true when the output contains "Logged in using ChatGPT",
-	 * meaning the user has native Codex auth and can access the default Codex model.
-	 */
-	private async hasCodexSubscription(): Promise<boolean> {
-		const codexBin = this.config.codexPath || "codex";
-		try {
-			const { execFile } = await import("node:child_process");
-			const { promisify } = await import("node:util");
-			const execFileAsync = promisify(execFile);
-			const { stdout, stderr } = await execFileAsync(
-				codexBin,
-				["login", "status"],
-				{ timeout: 5_000 },
-			);
-			const result = /logged in using chatgpt/i.test(stdout + stderr);
-			console.log(
-				`[CodexRunner] hasCodexSubscription: ${result} (stdout: "${stdout.trim()}"${stderr.trim() ? `, stderr: "${stderr.trim()}"` : ""})`,
-			);
-			return result;
-		} catch (error) {
-			console.warn(
-				`[CodexRunner] hasCodexSubscription error (returning false): ${error instanceof Error ? error.message : String(error)}`,
-			);
-			return false;
-		}
+	private createBackend(): CodexBackend {
+		return this.shouldUseAppServer()
+			? new AppServerCodexBackend()
+			: new ExecCodexBackend();
 	}
 
-	private createCodexClient(): Codex {
-		const codexHome = this.resolveCodexHome();
-		const envOverride = this.buildEnvOverride(codexHome);
-		const configOverrides = this.buildConfigOverrides();
-
-		return new Codex({
-			...(this.config.codexPath
-				? { codexPathOverride: this.config.codexPath }
-				: {}),
-			...(envOverride ? { env: envOverride } : {}),
-			...(configOverrides ? { config: configOverrides } : {}),
-		});
+	/** Whether this runner should drive Codex via the app-server backend. */
+	private shouldUseAppServer(): boolean {
+		return this.config.useAppServer ?? process.env.CODEX_USE_APP_SERVER === "1";
 	}
 
-	private buildThreadOptions(): ThreadOptions {
-		const additionalDirectories = this.getAdditionalDirectories();
-		const reasoningEffort =
-			this.config.modelReasoningEffort ??
-			getDefaultReasoningEffortForModel(this.config.model);
-		const webSearchMode =
-			this.config.webSearchMode ??
-			(this.config.includeWebSearch ? "live" : undefined);
-
-		const threadOptions: ThreadOptions = {
-			model: this.config.model,
-			sandboxMode: this.config.sandbox || "workspace-write",
-			workingDirectory: this.config.workingDirectory,
-			skipGitRepoCheck: this.config.skipGitRepoCheck ?? true,
-			approvalPolicy: this.config.askForApproval || "never",
-			...(reasoningEffort ? { modelReasoningEffort: reasoningEffort } : {}),
-			...(webSearchMode ? { webSearchMode } : {}),
-			...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
-		};
-
-		return threadOptions;
-	}
-
-	private getAdditionalDirectories(): string[] {
-		const workingDirectory = this.config.workingDirectory;
-		const uniqueDirectories = new Set<string>();
-
-		for (const directory of this.config.allowedDirectories || []) {
-			if (!directory || directory === workingDirectory) {
-				continue;
-			}
-			uniqueDirectories.add(directory);
-		}
-
-		return [...uniqueDirectories];
-	}
-
-	private prepareManagedSkillsForCodex(): void {
-		this.cleanupStagedSkills();
-
-		const skillSources = this.discoverCodexSkillSources();
-		if (skillSources.length === 0) {
-			return;
-		}
-
-		const skillsRoot = this.resolveManagedSkillsRoot();
-		if (!skillsRoot) {
-			return;
-		}
-		mkdirSync(skillsRoot, { recursive: true });
-		this.ensureManagedSkillsIgnored();
-
-		for (const source of skillSources) {
-			const target = join(skillsRoot, source.name);
-			if (!this.stageSkillDirectory(source, target)) {
-				continue;
-			}
-			this.stagedSkillPaths.push(target);
-			this.stagedSkillNames.push(source.name);
-		}
-	}
-
-	private discoverCodexSkillSources(): CodexSkillSource[] {
-		const configuredSkills = this.config.skills;
-		const allowedSkillNames =
-			Array.isArray(configuredSkills) && configuredSkills.length > 0
-				? new Set(configuredSkills)
-				: null;
-		if (Array.isArray(configuredSkills) && configuredSkills.length === 0) {
-			return [];
-		}
-
-		const sources: CodexSkillSource[] = [];
-		const seen = new Set<string>();
-		const addFromSkillsDirectory = (skillsDirectory: string): void => {
-			for (const source of this.readSkillSources(skillsDirectory)) {
-				if (allowedSkillNames && !allowedSkillNames.has(source.name)) {
-					continue;
-				}
-				if (seen.has(source.name)) {
-					continue;
-				}
-				seen.add(source.name);
-				sources.push(source);
-			}
-		};
-
-		for (const plugin of this.config.plugins ?? []) {
-			if (plugin.type !== "local" || typeof plugin.path !== "string") {
-				continue;
-			}
-			addFromSkillsDirectory(join(plugin.path, "skills"));
-		}
-
-		for (const directory of this.getCodexRepoLocalSkillRoots()) {
-			addFromSkillsDirectory(join(directory, ".claude", "skills"));
-		}
-
-		return sources;
-	}
-
-	private resolveManagedSkillsRoot(): string | undefined {
-		const workingDirectory = this.config.workingDirectory;
-		if (!workingDirectory) {
-			return undefined;
-		}
-		return join(workingDirectory, ".agents", "skills");
-	}
-
-	private ensureManagedSkillsIgnored(): void {
-		const workingDirectory = this.config.workingDirectory;
-		if (!workingDirectory) {
-			return;
-		}
-
-		try {
-			const rawExcludePath = execFileSync(
-				"git",
-				["rev-parse", "--git-path", "info/exclude"],
-				{
-					cwd: workingDirectory,
-					encoding: "utf-8",
-					stdio: ["ignore", "pipe", "ignore"],
-				},
-			).trim();
-			if (!rawExcludePath) {
-				return;
-			}
-			const excludePath = isAbsolute(rawExcludePath)
-				? rawExcludePath
-				: join(workingDirectory, rawExcludePath);
-
-			mkdirSync(dirname(excludePath), { recursive: true });
-			const existing = existsSync(excludePath)
-				? readFileSync(excludePath, "utf-8")
-				: "";
-			if (existing.split(/\r?\n/).includes(".agents/")) {
-				return;
-			}
-
-			const prefix =
-				existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-			appendFileSync(excludePath, `${prefix}.agents/\n`);
-		} catch {
-			// Non-git chat workspaces and restricted git metadata are fine; cleanup
-			// still removes staged symlinks, and the exclude is only for git hygiene.
-		}
-	}
-
-	private getCodexRepoLocalSkillRoots(): string[] {
-		const roots = new Set<string>();
-		if (this.config.workingDirectory) {
-			roots.add(this.config.workingDirectory);
-		}
-		for (const directory of this.config.additionalDirectories ?? []) {
-			if (directory) {
-				roots.add(directory);
-			}
-		}
-		return [...roots];
-	}
-
-	private readSkillSources(skillsDirectory: string): CodexSkillSource[] {
-		let entries: Dirent[];
-		try {
-			entries = readdirSync(skillsDirectory, { withFileTypes: true });
-		} catch {
-			return [];
-		}
-
-		return entries
-			.filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
-			.map((entry) => ({
-				name: entry.name,
-				path: join(skillsDirectory, entry.name),
-			}))
-			.filter((source) => existsSync(join(source.path, "SKILL.md")));
-	}
-
-	private stageSkillDirectory(
-		source: CodexSkillSource,
-		target: string,
-	): boolean {
-		if (existsSync(target)) {
-			console.warn(
-				`[CodexRunner] Skipping managed skill '${source.name}' because ${target} already exists`,
-			);
-			return false;
-		}
-
-		try {
-			symlinkSync(source.path, target, "dir");
-			return true;
-		} catch (error) {
-			console.warn(
-				`[CodexRunner] Failed to stage managed skill '${source.name}' for Codex: ${error instanceof Error ? error.message : String(error)}`,
-			);
-			return false;
-		}
-	}
-
-	private resolveCodexHome(): string {
-		const codexHome =
-			this.config.codexHome ||
-			process.env.CODEX_HOME ||
-			join(homedir(), ".codex");
-		mkdirSync(codexHome, { recursive: true });
-		return codexHome;
-	}
-
-	private buildEnvOverride(
-		codexHome: string,
-	): Record<string, string> | undefined {
-		if (!this.config.codexHome) {
-			return undefined;
-		}
-
-		const env: Record<string, string> = {};
-		for (const [key, value] of Object.entries(process.env)) {
-			if (typeof value === "string") {
-				env[key] = value;
-			}
-		}
-		env.CODEX_HOME = codexHome;
-		return env;
-	}
-
-	private buildCodexMcpServersConfig():
-		| Record<string, CodexConfigOverrides>
-		| undefined {
-		const autoDetectedPath = autoDetectMcpConfigPath(
-			this.config.workingDirectory,
-		);
-		const configPaths = autoDetectedPath
-			? [autoDetectedPath]
-			: ([] as string[]);
-		if (this.config.mcpConfigPath) {
-			const explicitPaths = Array.isArray(this.config.mcpConfigPath)
-				? this.config.mcpConfigPath
-				: [this.config.mcpConfigPath];
-			configPaths.push(...explicitPaths);
-		}
-
-		const fileBasedServers = loadMcpConfigFromPaths(configPaths);
-		const mergedServers = this.config.mcpConfig
-			? { ...fileBasedServers, ...this.config.mcpConfig }
-			: fileBasedServers;
-		if (Object.keys(mergedServers).length === 0) {
-			return undefined;
-		}
-
-		const allowedToolsFilters = buildMcpAllowedToolsFilters(
-			this.config.allowedTools,
-		);
-
-		// Codex MCP configuration reference:
-		// https://platform.openai.com/docs/docs-mcp
-		const codexServers: Record<string, CodexConfigOverrides> = {};
-		for (const [serverName, rawConfig] of Object.entries(mergedServers)) {
-			const configAny = rawConfig as Record<string, unknown>;
-			if (
-				typeof configAny.listTools === "function" ||
-				typeof configAny.callTool === "function"
-			) {
-				console.warn(
-					`[CodexRunner] Skipping MCP server '${serverName}' because in-process SDK server instances cannot be mapped to codex config`,
-				);
-				continue;
-			}
-
-			const mapped: CodexConfigOverrides = {};
-			copyConfigString(mapped, configAny, "command");
-			copyConfigArray(mapped, configAny, "args");
-			copyConfigObject(mapped, configAny, "env");
-			copyConfigArray(mapped, configAny, "env_vars");
-			copyConfigString(mapped, configAny, "cwd");
-			copyConfigString(mapped, configAny, "experimental_environment");
-			copyConfigString(mapped, configAny, "url");
-			copyConfigObject(mapped, configAny, "http_headers");
-			copyConfigObject(mapped, configAny, "headers", "http_headers");
-			copyConfigObject(mapped, configAny, "env_http_headers");
-			copyConfigString(mapped, configAny, "bearer_token_env_var");
-			copyConfigNumber(mapped, configAny, "timeout");
-			copyConfigNumber(mapped, configAny, "startup_timeout_sec");
-			copyConfigNumber(mapped, configAny, "tool_timeout_sec");
-			copyConfigBoolean(mapped, configAny, "enabled");
-			copyConfigBoolean(mapped, configAny, "required");
-			copyConfigArray(mapped, configAny, "enabled_tools");
-			copyConfigArray(mapped, configAny, "disabled_tools");
-			copyConfigString(mapped, configAny, "default_tools_approval_mode");
-			copyConfigObject(mapped, configAny, "tools");
-
-			if (!mapped.command && !mapped.url) {
-				console.warn(
-					`[CodexRunner] Skipping MCP server '${serverName}' because it has no command/url transport`,
-				);
-				continue;
-			}
-
-			const allowedToolsFilter = getMcpAllowedToolsFilter(
-				allowedToolsFilters,
-				serverName,
-			);
-			const hasNativeToolFilter =
-				Object.hasOwn(mapped, "enabled_tools") ||
-				Object.hasOwn(mapped, "disabled_tools");
-			if (allowedToolsFilter) {
-				applyCyrusMcpAllowedToolsSemantics(mapped, allowedToolsFilter, {
-					hasNativeToolFilter,
-				});
-			}
-			// If the MCP config already contains Codex-native enabled_tools or
-			// disabled_tools, keep those exact filters. They are more specific to
-			// Codex than Claude-style Cyrus allowedTools entries. A bare
-			// `mcp__server` intentionally emits no enabled_tools filter because it
-			// means "allow every tool exposed by this configured server".
-
-			codexServers[serverName] = mapped;
-		}
-
-		if (Object.keys(codexServers).length === 0) {
-			return undefined;
-		}
-
-		console.log(
-			`[CodexRunner] Configured ${Object.keys(codexServers).length} MCP server(s) for codex config (docs: ${CODEX_MCP_DOCS_URL})`,
-		);
-		return codexServers;
-	}
-
-	private buildConfigOverrides(): CodexConfigOverrides | undefined {
-		const appendSystemPrompt = (this.config.appendSystemPrompt ?? "").trim();
-		const configOverrides = this.config.configOverrides
-			? { ...this.config.configOverrides }
-			: {};
-		const mcpServers = this.buildCodexMcpServersConfig();
-		if (mcpServers) {
-			const existingMcpServers = configOverrides.mcp_servers;
-			if (
-				existingMcpServers &&
-				typeof existingMcpServers === "object" &&
-				!Array.isArray(existingMcpServers)
-			) {
-				configOverrides.mcp_servers = {
-					...(existingMcpServers as Record<string, CodexConfigValue>),
-					...mcpServers,
-				};
-			} else {
-				configOverrides.mcp_servers = mcpServers;
-			}
-		}
-
-		const sandboxWorkspaceWrite = configOverrides.sandbox_workspace_write;
-		// Keep workspace-write as the default sandbox, but enable outbound network so
-		// common remote workflows (for example `git`/`gh` against GitHub) work without
-		// requiring danger-full-access.
-		if (
-			sandboxWorkspaceWrite &&
-			typeof sandboxWorkspaceWrite === "object" &&
-			!Array.isArray(sandboxWorkspaceWrite)
-		) {
-			configOverrides.sandbox_workspace_write = {
-				...sandboxWorkspaceWrite,
-				network_access:
-					(sandboxWorkspaceWrite as { network_access?: boolean })
-						.network_access ?? true,
-			};
-		} else if (!sandboxWorkspaceWrite) {
-			configOverrides.sandbox_workspace_write = { network_access: true };
-		}
-
-		if (!appendSystemPrompt) {
-			return Object.keys(configOverrides).length > 0
-				? configOverrides
-				: undefined;
-		}
-
+	private buildMapperContext(): MapperContext {
+		const self = this;
 		return {
-			...configOverrides,
-			developer_instructions: appendSystemPrompt,
-		};
-	}
-
-	private async runTurn(
-		thread: Thread,
-		prompt: string,
-		signal: AbortSignal,
-	): Promise<void> {
-		const streamedTurn = await thread.runStreamed(prompt, {
-			signal,
-			...(this.config.outputSchema
-				? { outputSchema: this.config.outputSchema }
-				: {}),
-		});
-		for await (const event of streamedTurn.events) {
-			this.handleEvent(event);
-		}
-	}
-
-	private handleEvent(event: CodexJsonEvent): void {
-		this.emit("streamEvent", event);
-
-		switch (event.type) {
-			case "thread.started": {
-				if (this.sessionInfo) {
-					this.sessionInfo.sessionId = event.thread_id;
+			get workingDirectory(): string | undefined {
+				return self.config.workingDirectory;
+			},
+			get model(): string | undefined {
+				return self.config.model;
+			},
+			getSessionId: () => self.sessionInfo?.sessionId || "pending",
+			getStagedSkillNames: () => self.skillStager.getStagedSkillNames(),
+			emitMessage: (message) => self.emit("message", message),
+			onThreadStarted: (threadId) => {
+				if (self.sessionInfo) {
+					self.sessionInfo.sessionId = threadId;
 				}
-				this.emitSystemInitMessage(event.thread_id);
-				break;
-			}
-			case "item.completed": {
-				if (event.item.type === "agent_message") {
-					this.emitAssistantMessage(event.item.text);
-				} else {
-					this.emitToolMessagesForItem(event.item, true);
-				}
-				break;
-			}
-			case "item.started": {
-				this.emitToolMessagesForItem(event.item, false);
-				break;
-			}
-			case "turn.completed": {
-				this.lastUsage = parseUsage(event.usage);
-				this.pendingResultMessage = this.createSuccessResultMessage(
-					this.lastAssistantText || "Codex session completed successfully",
-				);
-				break;
-			}
-			case "turn.failed": {
-				// Prefer event.error.message; fallback to last standalone "error" event
-				const message =
-					event.error?.message ||
-					this.errorMessages.at(-1) ||
-					"Codex execution failed";
-				this.errorMessages.push(message);
-				this.pendingResultMessage = this.createErrorResultMessage(message);
-				break;
-			}
-			case "error": {
-				this.errorMessages.push(event.message);
-				break;
-			}
-			default:
-				break;
-		}
-	}
-
-	private projectItemToTool(item: ThreadItem): ToolProjection | null {
-		switch (item.type) {
-			case "command_execution": {
-				const commandItem = item as CommandExecutionItem;
-				const isError =
-					commandItem.status === "failed" ||
-					(typeof commandItem.exit_code === "number" &&
-						commandItem.exit_code !== 0);
-				const result =
-					commandItem.aggregated_output?.trim() ||
-					(isError
-						? `Command failed (exit code ${commandItem.exit_code ?? "unknown"})`
-						: "Command completed with no output");
-
-				return {
-					toolUseId: commandItem.id,
-					toolName: inferCommandToolName(commandItem.command),
-					toolInput: { command: commandItem.command },
-					result,
-					isError,
-				};
-			}
-			case "file_change": {
-				const fileChangeItem = item as FileChangeItem;
-				const primaryPath =
-					fileChangeItem.changes[0]?.path &&
-					normalizeFilePath(
-						fileChangeItem.changes[0].path,
-						this.config.workingDirectory,
-					);
-				return {
-					toolUseId: fileChangeItem.id,
-					toolName: "Edit",
-					toolInput: {
-						...(primaryPath ? { file_path: primaryPath } : {}),
-						changes: fileChangeItem.changes.map((change) => ({
-							kind: change.kind,
-							path: normalizeFilePath(
-								change.path,
-								this.config.workingDirectory,
-							),
-						})),
-					},
-					result: summarizeFileChanges(
-						fileChangeItem,
-						this.config.workingDirectory,
-					),
-					isError: fileChangeItem.status === "failed",
-				};
-			}
-			case "web_search": {
-				const webSearchItem = item as WebSearchItem;
-				const extendedItem = item as unknown as Record<string, unknown>;
-				const action = asRecord(extendedItem.action);
-				const actionType =
-					typeof action?.type === "string" ? action.type : undefined;
-				const isFetch = actionType === "open_page";
-				const url =
-					typeof action?.url === "string"
-						? action.url
-						: typeof extendedItem.url === "string"
-							? extendedItem.url
-							: undefined;
-				const pattern =
-					typeof action?.pattern === "string"
-						? action.pattern
-						: typeof extendedItem.pattern === "string"
-							? extendedItem.pattern
-							: undefined;
-
-				return {
-					toolUseId: webSearchItem.id,
-					toolName: isFetch ? "WebFetch" : "WebSearch",
-					toolInput: isFetch
-						? {
-								url: url || webSearchItem.query,
-								...(pattern ? { pattern } : {}),
-							}
-						: { query: webSearchItem.query },
-					result:
-						action && Object.keys(action).length > 0
-							? safeStringify(action)
-							: `Search completed for query: ${webSearchItem.query}`,
-					isError: false,
-				};
-			}
-			case "mcp_tool_call": {
-				const mcpItem = item as McpToolCallItem;
-				return {
-					toolUseId: mcpItem.id,
-					toolName: `mcp__${normalizeMcpIdentifier(mcpItem.server)}__${normalizeMcpIdentifier(mcpItem.tool)}`,
-					toolInput: asRecord(mcpItem.arguments) || {
-						arguments: mcpItem.arguments,
-					},
-					result: toMcpResultString(mcpItem),
-					isError: mcpItem.status === "failed" || Boolean(mcpItem.error),
-				};
-			}
-			case "todo_list": {
-				const todoItem = item as TodoListItem;
-				return {
-					toolUseId: todoItem.id,
-					toolName: "TodoWrite",
-					toolInput: {
-						todos: todoItem.items.map((todo) => ({
-							content: todo.text,
-							status: todo.completed ? "completed" : "pending",
-						})),
-					},
-					result: `Updated todo list (${todoItem.items.length} items)`,
-					isError: false,
-				};
-			}
-			default:
-				return null;
-		}
-	}
-
-	private emitToolMessagesForItem(
-		item: ThreadItem,
-		includeResult: boolean,
-	): void {
-		const projection = this.projectItemToTool(item);
-		if (!projection) {
-			return;
-		}
-
-		if (!this.emittedToolUseIds.has(projection.toolUseId)) {
-			const assistantMessage: SDKAssistantMessage = {
-				type: "assistant",
-				message: createAssistantToolUseMessage(
-					projection.toolUseId,
-					projection.toolName,
-					projection.toolInput,
-				),
-				parent_tool_use_id: null,
-				uuid: crypto.randomUUID(),
-				session_id: this.sessionInfo?.sessionId || "pending",
-			};
-			this.messages.push(assistantMessage);
-			this.emit("message", assistantMessage);
-			this.emittedToolUseIds.add(projection.toolUseId);
-		}
-
-		if (!includeResult) {
-			return;
-		}
-
-		const userMessage: SDKUserMessage = {
-			type: "user",
-			message: createUserToolResultMessage(
-				projection.toolUseId,
-				projection.result,
-				projection.isError,
-			),
-			parent_tool_use_id: null,
-			uuid: crypto.randomUUID(),
-			session_id: this.sessionInfo?.sessionId || "pending",
+			},
 		};
-
-		this.messages.push(userMessage);
-		this.emit("message", userMessage);
-		this.emittedToolUseIds.delete(projection.toolUseId);
 	}
 
 	private finalizeSession(caughtError?: unknown): void {
@@ -1406,161 +197,26 @@ export class CodexRunner extends EventEmitter implements IAgentRunner {
 		}
 
 		this.sessionInfo.isRunning = false;
-
-		// Ensure init is emitted even if stream fails before thread.started.
-		if (!this.hasInitMessage) {
-			this.emitSystemInitMessage(
-				this.sessionInfo.sessionId || this.config.resumeSessionId || "pending",
-			);
-		}
-
-		if (caughtError && !this.wasStopped) {
-			const errorMessage = normalizeError(caughtError);
-			this.errorMessages.push(errorMessage);
-		}
-
-		if (!this.pendingResultMessage && !this.wasStopped) {
-			if (caughtError) {
-				this.pendingResultMessage = this.createErrorResultMessage(
-					this.errorMessages.at(-1) || "Codex execution failed",
-				);
-			} else {
-				this.pendingResultMessage = this.createSuccessResultMessage(
-					this.lastAssistantText || "Codex session completed successfully",
-				);
-			}
-		}
-
-		if (this.pendingResultMessage) {
-			this.messages.push(this.pendingResultMessage);
-			this.emit("message", this.pendingResultMessage);
-			this.pendingResultMessage = null;
-		}
-
-		this.emit("complete", [...this.messages]);
-
+		const messages = this.mapper.finalize({
+			caughtError,
+			wasStopped: this.wasStopped,
+		});
+		this.emit("complete", messages);
 		this.cleanupRuntimeState();
 	}
 
-	private emitAssistantMessage(text: string): void {
-		const normalized = text.trim();
-		if (!normalized) {
-			return;
-		}
-
-		this.lastAssistantText = normalized;
-		const assistantMessage: SDKAssistantMessage = {
-			type: "assistant",
-			message: createAssistantBetaMessage(normalized),
-			parent_tool_use_id: null,
-			uuid: crypto.randomUUID(),
-			session_id: this.sessionInfo?.sessionId || "pending",
-		};
-		this.messages.push(assistantMessage);
-		this.emit("message", assistantMessage);
-	}
-
-	private emitSystemInitMessage(sessionId: string): void {
-		if (this.hasInitMessage) {
-			return;
-		}
-		this.hasInitMessage = true;
-
-		const initMessage: SDKSystemInitMessage = {
-			type: "system",
-			subtype: "init",
-			agents: undefined,
-			apiKeySource: "user",
-			claude_code_version: "codex-cli",
-			cwd: this.config.workingDirectory || cwd(),
-			tools: [],
-			mcp_servers: [],
-			model: this.config.model || DEFAULT_CODEX_MODEL,
-			permissionMode: "default",
-			slash_commands: [],
-			output_style: "default",
-			skills: [...this.stagedSkillNames],
-			plugins: [],
-			uuid: crypto.randomUUID(),
-			session_id: sessionId,
-		};
-
-		this.messages.push(initMessage);
-		this.emit("message", initMessage);
-	}
-
-	private createSuccessResultMessage(result: string): SDKResultMessage {
-		const durationMs = Math.max(Date.now() - this.startTimestampMs, 0);
-		return {
-			type: "result",
-			subtype: "success",
-			duration_ms: durationMs,
-			duration_api_ms: 0,
-			is_error: false,
-			num_turns: 1,
-			result,
-			stop_reason: null,
-			total_cost_usd: 0,
-			usage: createResultUsage(this.lastUsage),
-			modelUsage: {},
-			permission_denials: [],
-			uuid: crypto.randomUUID(),
-			session_id: this.sessionInfo?.sessionId || "pending",
-		};
-	}
-
-	private createErrorResultMessage(errorMessage: string): SDKResultMessage {
-		const durationMs = Math.max(Date.now() - this.startTimestampMs, 0);
-		return {
-			type: "result",
-			subtype: "error_during_execution",
-			duration_ms: durationMs,
-			duration_api_ms: 0,
-			is_error: true,
-			num_turns: 1,
-			stop_reason: null,
-			errors: [errorMessage],
-			total_cost_usd: 0,
-			usage: createResultUsage(this.lastUsage),
-			modelUsage: {},
-			permission_denials: [],
-			uuid: crypto.randomUUID(),
-			session_id: this.sessionInfo?.sessionId || "pending",
-		};
-	}
-
 	private cleanupRuntimeState(): void {
-		this.abortController = null;
-		this.cleanupStagedSkills();
-	}
-
-	private cleanupStagedSkills(): void {
-		for (const target of this.stagedSkillPaths) {
-			try {
-				if (this.isStagedSkillPath(target)) {
-					rmSync(target, { recursive: true, force: true });
-				}
-			} catch {
-				// Best-effort cleanup: never mask the session result.
-			}
+		const backend = this.backend;
+		this.backend = null;
+		if (backend) {
+			void backend.close();
 		}
-		this.stagedSkillPaths = [];
-		this.stagedSkillNames = [];
-	}
-
-	private isStagedSkillPath(path: string): boolean {
-		try {
-			const stat = lstatSync(path);
-			return stat.isDirectory() || stat.isSymbolicLink();
-		} catch {
-			return false;
-		}
+		this.skillStager.cleanup();
 	}
 
 	stop(): void {
 		if (this.sessionInfo?.isRunning) {
 			this.wasStopped = true;
-			this.abortController?.abort();
 		}
 		this.cleanupRuntimeState();
 	}
@@ -1570,10 +226,38 @@ export class CodexRunner extends EventEmitter implements IAgentRunner {
 	}
 
 	getMessages(): SDKMessage[] {
-		return [...this.messages];
+		return this.mapper.getMessages();
 	}
 
 	getFormatter(): IMessageFormatter {
 		return this.formatter;
+	}
+
+	// ---- Backward-compatible test shims -------------------------------------
+	// These delegate to the extracted collaborators so existing unit tests that
+	// reach into private methods keep exercising real behavior.
+
+	/** @internal — staging entry point used by skills tests. */
+	protected prepareManagedSkillsForCodex(): void {
+		this.skillStager.stage();
+	}
+
+	/** @internal — MCP translation entry point used by mcp-config tests. */
+	protected buildCodexMcpServersConfig() {
+		return buildCodexMcpServersConfig({
+			workingDirectory: this.config.workingDirectory,
+			mcpConfigPath: this.config.mcpConfigPath,
+			mcpConfig: this.config.mcpConfig,
+			allowedTools: this.config.allowedTools,
+		});
+	}
+
+	/** @internal — event mapping entry point used by tool-event tests. */
+	protected handleEvent(event: CodexJsonEvent): void {
+		this.emit("streamEvent", event);
+		const normalized = normalizeExecEvent(event);
+		if (normalized) {
+			this.mapper.handle(normalized);
+		}
 	}
 }
