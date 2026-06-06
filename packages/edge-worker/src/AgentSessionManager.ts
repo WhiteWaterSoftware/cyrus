@@ -33,9 +33,22 @@ import type {
 
 /**
  * Events emitted by AgentSessionManager
+ *
+ * `sessionTerminal` — fires when a session transitions into a terminal
+ * status (Complete | Error | Stale) OR when removeSession() is invoked.
+ * EdgeWorker listens to this to release its synchronous concurrency
+ * slot (HALO-300's queue gate) and drain the next queued job. The
+ * previous listener on `GlobalSessionRegistry.sessionCompleted` never
+ * fired because the registry isn't populated on the delegation path —
+ * delegations live in AgentSessionManager.sessions instead, so the
+ * authoritative termination signal has to come from this class.
  */
-// biome-ignore lint/complexity/noBannedTypes: Empty events type (events removed in CYPACK-996 skill refactor)
-export type AgentSessionManagerEvents = {};
+export type AgentSessionManagerEvents = {
+	sessionTerminal: (
+		sessionId: string,
+		session: CyrusAgentSession | undefined,
+	) => void;
+};
 
 /**
  * Type-safe event emitter interface for AgentSessionManager
@@ -613,6 +626,7 @@ export class AgentSessionManager extends EventEmitter {
 		const session = this.sessions.get(sessionId);
 		if (!session) return;
 
+		const previousStatus = session.status;
 		session.status = status;
 		session.updatedAt = Date.now();
 
@@ -621,6 +635,20 @@ export class AgentSessionManager extends EventEmitter {
 		}
 
 		this.sessions.set(sessionId, session);
+
+		// Emit `sessionTerminal` on transition INTO a terminal status. The
+		// previousStatus guard prevents re-firing on idempotent terminal
+		// updates (e.g. error → error), which would double-decrement
+		// EdgeWorker's concurrency-slot counter and let an extra queued
+		// job spawn.
+		const TERMINAL = new Set<AgentSessionStatus>([
+			AgentSessionStatus.Complete,
+			AgentSessionStatus.Error,
+			AgentSessionStatus.Stale,
+		]);
+		if (TERMINAL.has(status) && !TERMINAL.has(previousStatus)) {
+			this.emit("sessionTerminal", sessionId, session);
+		}
 	}
 
 	/**
@@ -1418,7 +1446,7 @@ export class AgentSessionManager extends EventEmitter {
 		const log = this.sessionLog(sessionId);
 		const session = this.sessions.get(sessionId);
 
-		if (!session || !session.externalSessionId) {
+		if (!session?.externalSessionId) {
 			log.debug(
 				`Skipping ${label} - no external session ID (platform: ${session?.issueContext?.trackerId || "unknown"})`,
 			);
@@ -1552,6 +1580,12 @@ export class AgentSessionManager extends EventEmitter {
 	 */
 	removeSession(sessionId: string): void {
 		const log = this.sessionLog(sessionId);
+		const session = this.sessions.get(sessionId);
+		const wasNonTerminal =
+			session !== undefined &&
+			session.status !== AgentSessionStatus.Complete &&
+			session.status !== AgentSessionStatus.Error &&
+			session.status !== AgentSessionStatus.Stale;
 		this.sessions.delete(sessionId);
 		this.entries.delete(sessionId);
 		this.activitySinks.delete(sessionId);
@@ -1562,6 +1596,13 @@ export class AgentSessionManager extends EventEmitter {
 		this.bufferedAssistantEntryBySession.delete(sessionId);
 		this.messageProcessingQueues.delete(sessionId);
 		log.debug("Removed session");
+		// Treat removal of a non-terminal session as a terminal transition —
+		// otherwise hard cleanups (issue moved to Done/Cancelled, unassign)
+		// would leak the concurrency slot. Skip the emit if the session was
+		// already terminal; updateSessionStatus already fired.
+		if (wasNonTerminal) {
+			this.emit("sessionTerminal", sessionId, session);
+		}
 	}
 
 	/**
@@ -1681,7 +1722,7 @@ export class AgentSessionManager extends EventEmitter {
 		message: SDKStatusMessage,
 	): Promise<void> {
 		const session = this.sessions.get(sessionId);
-		if (!session || !session.externalSessionId) {
+		if (!session?.externalSessionId) {
 			const log = this.sessionLog(sessionId);
 			log.debug(
 				`Skipping status message - no external session ID (platform: ${session?.issueContext?.trackerId || "unknown"})`,

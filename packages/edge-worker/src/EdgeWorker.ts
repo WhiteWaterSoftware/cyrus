@@ -284,9 +284,37 @@ export class EdgeWorker extends EventEmitter {
 	 * Concurrency gate + persistent FIFO-with-priority queue for new
 	 * delegations. When `getActiveSessionCount()` is already at
 	 * `maxConcurrentSessions`, new agentSessionCreated webhooks land here
-	 * instead of spawning a runner. Drained on `sessionCompleted`.
+	 * instead of spawning a runner. Drained on
+	 * `AgentSessionManager.sessionTerminal`.
 	 */
 	private sessionQueueManager: SessionQueueManager;
+
+	/**
+	 * Synchronous count of concurrency slots reserved by `maybeEnqueueDelegation`
+	 * or `maybeDrainQueue` — the SOLE source of truth for the queue gate.
+	 *
+	 * Why a separate counter instead of polling a session-manager registry:
+	 * `handleAgentSessionCreatedWebhook` is an async function (Linear routing,
+	 * blocked-by checks, etc. each `await`). If two delegation webhooks arrive
+	 * within the same Node event loop, both `await` their way through the
+	 * pre-gate steps and BOTH reach the gate check before either has
+	 * populated AgentSessionManager.sessions. A registry-based count yields 0
+	 * on both webhooks → both pass the gate → two concurrent sessions on a
+	 * cap of 1. (Observed live with HALO-262 + HALO-74.) Holding the slot
+	 * accounting in a synchronous counter eliminates the race: read-then-
+	 * increment happens in one tick, the second webhook sees `>= max` and
+	 * queues.
+	 *
+	 * Lifecycle: incremented in `maybeEnqueueDelegation` when the gate lets
+	 * a job through, AND in `maybeDrainQueue` before invoking
+	 * `initializeAgentRunner` for a popped job. Decremented when
+	 * `AgentSessionManager` emits `sessionTerminal` (covers normal completion,
+	 * stop requests, and the `removeSession` hard-cleanup path) OR if
+	 * `initializeAgentRunner` throws before a session is even created.
+	 * Floored at 0 defensively so an extra release can't ever NEGATE the
+	 * counter and admit a phantom over-cap session.
+	 */
+	private concurrentSlots = 0;
 
 	/**
 	 * Sessions parked due to blocked-by dependencies.
@@ -395,20 +423,20 @@ export class EdgeWorker extends EventEmitter {
 		this.globalSessionRegistry = new GlobalSessionRegistry();
 
 		// Session queue: gates new delegations when active >= maxConcurrentSessions.
-		// Subscribe to `sessionCompleted` for the drain trigger — every time a
-		// session reaches Complete/Error the registry emits this event and we try
-		// to pop the next queued job. Subscribed here in the constructor so the
-		// listener is in place before `start()` does the boot-time drain.
+		// The drain trigger is `agentSessionManager.sessionTerminal`, wired
+		// further down once agentSessionManager is constructed.
+		//
+		// IMPORTANT: don't add a `globalSessionRegistry.sessionCompleted`
+		// listener here — the registry is a Phase-1 cross-repo cache and is
+		// NOT populated on the delegation path. The original implementation
+		// shipped with that listener and the queue silently never drained
+		// because the event never fired. The slot accounting now lives in
+		// `concurrentSlots` (synchronous counter in this class), released
+		// off `AgentSessionManager.sessionTerminal`.
 		this.sessionQueueManager = new SessionQueueManager({
 			maxConcurrentSessions: this.config.maxConcurrentSessions ?? 1,
 			queueDir: this.cyrusHome,
 			logger: createLogger({ component: "SessionQueueManager" }),
-		});
-		this.globalSessionRegistry.on("sessionCompleted", () => {
-			// Fire-and-forget: drain failures are logged inside maybeDrainQueue.
-			// We don't await here because the registry's emit chain shouldn't
-			// block on a potentially long-running initializeAgentRunner call.
-			void this.maybeDrainQueue();
 		});
 
 		// Initialize repository router with dependencies
@@ -516,6 +544,18 @@ export class EdgeWorker extends EventEmitter {
 				);
 			},
 		);
+
+		// Wire the concurrency-slot release on session termination. Fired by
+		// AgentSessionManager when a session transitions into Complete/Error/
+		// Stale OR is hard-removed (issue moved terminal, unassign). Releases
+		// the synchronous `concurrentSlots` counter the queue gate reads from
+		// and drains the next queued job in the same tick.
+		this.agentSessionManager.on("sessionTerminal", (sessionId) => {
+			this.releaseConcurrencySlot(
+				`session ${sessionId} reached terminal status`,
+			);
+			void this.maybeDrainQueue();
+		});
 
 		// Initialize repositories with path resolution
 		for (const repo of config.repositories) {
@@ -4037,21 +4077,29 @@ ${taskSection}`;
 	// ============================================================================
 
 	/**
-	 * Count non-terminal sessions in the registry. Used for the concurrency
-	 * gate and for boot-time drain decisions. Linear's AgentSessionStatus has
-	 * three terminal values — `complete`, `error`, `stale` — anything else
-	 * (active, pending, awaitingInput) means a runner is still attached or
-	 * the session is waiting on a user, so it owns a slot.
+	 * Active session count for the queue gate and the `/status` endpoint.
+	 * Returns the synchronous slot counter — see `concurrentSlots` for why
+	 * this is NOT derived from any session-manager registry (registry reads
+	 * race against the async webhook handler and silently let extra sessions
+	 * spawn over the cap).
 	 */
 	private getActiveSessionCount(): number {
-		return this.globalSessionRegistry
-			.getAllSessions()
-			.filter(
-				(s) =>
-					s.status !== "complete" &&
-					s.status !== "error" &&
-					s.status !== "stale",
-			).length;
+		return this.concurrentSlots;
+	}
+
+	/**
+	 * Release a concurrency slot. Floored at 0 so an unexpected double-emit
+	 * (e.g. completeSession followed by removeSession on the same session)
+	 * cannot drop the count below zero and admit a phantom over-cap session.
+	 * Caller is responsible for calling `maybeDrainQueue()` after releasing
+	 * if it wants the next queued job to pop in the same tick.
+	 */
+	private releaseConcurrencySlot(reason: string): void {
+		const before = this.concurrentSlots;
+		this.concurrentSlots = Math.max(0, this.concurrentSlots - 1);
+		this.logger.info(
+			`Concurrency slot released (${before} -> ${this.concurrentSlots}; reason: ${reason})`,
+		);
 	}
 
 	/**
@@ -4092,14 +4140,36 @@ ${taskSection}`;
 		routingMethod?: string;
 		log: ILogger;
 	}): Promise<boolean> {
-		const activeCount = this.getActiveSessionCount();
+		// SYNCHRONOUS read-then-mutate of the slot counter. No `await` between
+		// the gate check and the increment, so two concurrent webhooks can't
+		// both observe count<max and both pass: the second sees the first's
+		// increment in the same tick and queues. (The pre-fix version read
+		// from GlobalSessionRegistry, which is never populated for delegations
+		// — both webhooks saw 0 and both spawned. Cap=1 → 2 sessions on
+		// HALO-262 + HALO-74.)
+		const activeCount = this.concurrentSlots;
 		if (!this.sessionQueueManager.shouldEnqueue(activeCount)) {
+			// Below the cap — reserve a slot for this delegation. Releasing
+			// happens on `agentSessionManager.sessionTerminal` OR in the catch
+			// arm of the caller around `initializeAgentRunner` (init failure
+			// before the session is even created).
+			this.concurrentSlots += 1;
+			this.logger.info(
+				`Concurrency slot reserved (${activeCount} -> ${this.concurrentSlots}; cap=${this.sessionQueueManager.getMaxConcurrentSessions()})`,
+			);
 			return false;
 		}
 
 		if (!args.agentSession.issue) {
 			args.log.warn(
 				"Concurrency gate hit but agentSession has no issue — falling through to runner",
+			);
+			// Caller will still spawn the runner — reserve the slot so it's
+			// accounted for. A malformed webhook is rare; not reserving here
+			// would silently let an over-cap session through.
+			this.concurrentSlots += 1;
+			this.logger.warn(
+				`Concurrency slot reserved on fallthrough (no issue on agentSession ${args.agentSession.id}; concurrentSlots=${this.concurrentSlots})`,
 			);
 			return false;
 		}
@@ -4151,15 +4221,19 @@ ${taskSection}`;
 
 	/**
 	 * Drain head-of-queue if we're below the cap. Idempotent — safe to call
-	 * after every `sessionCompleted` and once on boot. Pops at most ONE job
-	 * per call because the registry will fire `sessionCompleted` for each
+	 * after every `sessionTerminal` and once on boot. Pops at most ONE job
+	 * per call because AgentSessionManager fires `sessionTerminal` for each
 	 * finished session in turn, and a runaway drain loop (e.g. spawning N
 	 * jobs at once on a misconfigured cap) would defeat the whole point of
 	 * the gate.
+	 *
+	 * SYNCHRONOUSLY reserves a slot the same way `maybeEnqueueDelegation`
+	 * does, before the first `await`, so a webhook arriving in the gap
+	 * between the pop and the runner spawn sees the reservation and queues.
 	 */
 	private async maybeDrainQueue(): Promise<void> {
 		if (this.sessionQueueManager.getDepth() === 0) return;
-		const activeCount = this.getActiveSessionCount();
+		const activeCount = this.concurrentSlots;
 		if (activeCount >= this.sessionQueueManager.getMaxConcurrentSessions()) {
 			return;
 		}
@@ -4167,8 +4241,9 @@ ${taskSection}`;
 		const job = this.sessionQueueManager.popNext();
 		if (!job) return;
 
+		this.concurrentSlots += 1;
 		this.logger.info(
-			`Draining queued ${job.issueIdentifier} (active=${activeCount}/${this.sessionQueueManager.getMaxConcurrentSessions()}, remaining=${this.sessionQueueManager.getDepth()})`,
+			`Draining queued ${job.issueIdentifier}; slot reserved (${activeCount} -> ${this.concurrentSlots}; remaining=${this.sessionQueueManager.getDepth()})`,
 		);
 
 		// Resolve repository configs from snapshot IDs. A repo could have been
@@ -4189,6 +4264,12 @@ ${taskSection}`;
 			this.logger.error(
 				`Queued ${job.issueIdentifier} had no resolvable repositories — dropping`,
 			);
+			// Release the slot we reserved on pop — no session will spawn
+			// and there's no `sessionTerminal` event coming to release it.
+			this.releaseConcurrencySlot(
+				`drain abandoned ${job.issueIdentifier}: no resolvable repositories`,
+			);
+			void this.maybeDrainQueue();
 			return;
 		}
 
@@ -4227,6 +4308,13 @@ ${taskSection}`;
 					`Re-assign the issue in Linear to retry.`,
 				err instanceof Error ? err : new Error(String(err)),
 			);
+			// Init failed before AgentSessionManager could ever emit
+			// `sessionTerminal`. Release the slot the pop reserved, then drain
+			// — a queued job behind us shouldn't get starved by our failure.
+			this.releaseConcurrencySlot(
+				`drain ${job.issueIdentifier} threw before session creation`,
+			);
+			void this.maybeDrainQueue();
 		}
 	}
 
@@ -4615,16 +4703,29 @@ ${taskSection}`;
 		});
 		if (enqueued) return;
 
-		// Initialize agent runner using shared logic (pass full repositories array)
-		await this.initializeAgentRunner(
-			agentSession,
-			repositories,
-			linearWorkspaceId,
-			guidance,
-			commentBody,
-			baseBranchOverrides,
-			routingMethod,
-		);
+		// `maybeEnqueueDelegation` returning `false` means it reserved a
+		// concurrency slot for this delegation. If `initializeAgentRunner`
+		// throws before AgentSessionManager.createSessionEntry runs (i.e.
+		// before the session exists to ever emit `sessionTerminal`), the
+		// slot would otherwise leak and the queue would gate the next job
+		// against a phantom count. Release on synchronous init failure.
+		try {
+			await this.initializeAgentRunner(
+				agentSession,
+				repositories,
+				linearWorkspaceId,
+				guidance,
+				commentBody,
+				baseBranchOverrides,
+				routingMethod,
+			);
+		} catch (err) {
+			this.releaseConcurrencySlot(
+				`initializeAgentRunner threw for agentSession ${agentSession.id} before a session was created`,
+			);
+			void this.maybeDrainQueue();
+			throw err;
+		}
 	}
 
 	/**
