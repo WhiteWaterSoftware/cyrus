@@ -306,6 +306,16 @@ export const RepositoryConfigSchema = z.object({
 	model: z.string().optional(),
 	fallbackModel: z.string().optional(),
 
+	/**
+	 * Override the repository setup-script filename run per worktree. Defaults
+	 * to the cross-platform `cyrus-setup.{sh,ps1,cmd,bat}` lookup. Set this when
+	 * one repo hosts more than one runner identity and each needs its own setup
+	 * script (e.g. a second agent that must commit under a different git
+	 * identity). The named file is looked up verbatim in the repo root; its
+	 * extension selects the interpreter.
+	 */
+	repoSetupScript: z.string().optional(),
+
 	// Label-based system prompt configuration
 	labelPrompts: LabelPromptsSchema.optional(),
 

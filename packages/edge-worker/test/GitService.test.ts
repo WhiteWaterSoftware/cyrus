@@ -1134,6 +1134,77 @@ describe("GitService", () => {
 		});
 	});
 
+	describe("createGitWorktree - repoSetupScript override", () => {
+		const happyPathExec = () => {
+			mockExecSync.mockImplementation((cmd: any) => {
+				const cmdStr = String(cmd);
+				if (cmdStr === "git rev-parse --git-dir") return Buffer.from(".git\n");
+				if (cmdStr === "git worktree list --porcelain") return "";
+				if (cmdStr.includes("git rev-parse --verify"))
+					throw new Error("not found");
+				if (cmdStr.includes("git fetch origin")) return Buffer.from("");
+				if (cmdStr.includes("git ls-remote"))
+					return Buffer.from("abc123 refs/heads/main\n");
+				if (cmdStr.includes("git worktree add")) return Buffer.from("");
+				return Buffer.from("");
+			});
+		};
+
+		it("runs the configured repoSetupScript instead of cyrus-setup.sh", async () => {
+			const issue = makeIssue();
+			const repository = makeRepository({
+				repoSetupScript: "wallace-setup.sh",
+			});
+			happyPathExec();
+
+			// Only wallace-setup.sh exists in the repo root — cyrus-setup.sh does NOT.
+			mockExistsSync.mockImplementation(
+				(path: any) => String(path) === "/home/user/repo/wallace-setup.sh",
+			);
+			mockStatSync.mockImplementation((path: any) =>
+				String(path) === "/home/user/repo/wallace-setup.sh"
+					? ({ mode: 0o755, isFile: () => false } as any)
+					: ({ isFile: () => false } as any),
+			);
+
+			await gitService.createGitWorktree(issue, [repository]);
+
+			const commands = mockExecSync.mock.calls.map((c) => String(c[0]));
+			expect(mockExecSync).toHaveBeenCalledWith(
+				'bash "/home/user/repo/wallace-setup.sh"',
+				expect.objectContaining({
+					env: expect.objectContaining({ LINEAR_ISSUE_IDENTIFIER: "ENG-97" }),
+					timeout: 5 * 60 * 1000,
+				}),
+			);
+			expect(commands.some((c) => c.includes("cyrus-setup.sh"))).toBe(false);
+		});
+
+		it("falls back to cyrus-setup.sh when repoSetupScript is unset", async () => {
+			const issue = makeIssue();
+			const repository = makeRepository();
+			happyPathExec();
+
+			mockExistsSync.mockImplementation(
+				(path: any) => String(path) === "/home/user/repo/cyrus-setup.sh",
+			);
+			mockStatSync.mockImplementation((path: any) =>
+				String(path) === "/home/user/repo/cyrus-setup.sh"
+					? ({ mode: 0o755, isFile: () => false } as any)
+					: ({ isFile: () => false } as any),
+			);
+
+			await gitService.createGitWorktree(issue, [repository]);
+
+			expect(mockExecSync).toHaveBeenCalledWith(
+				'bash "/home/user/repo/cyrus-setup.sh"',
+				expect.objectContaining({
+					env: expect.objectContaining({ LINEAR_ISSUE_IDENTIFIER: "ENG-97" }),
+				}),
+			);
+		});
+	});
+
 	describe("createGitWorktree - 0 repos", () => {
 		it("creates a plain folder with no git worktree", async () => {
 			const issue = makeIssue();

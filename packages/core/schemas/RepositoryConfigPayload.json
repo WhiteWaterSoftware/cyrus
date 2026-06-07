@@ -94,6 +94,9 @@
 		"fallbackModel": {
 			"type": "string"
 		},
+		"repoSetupScript": {
+			"type": "string"
+		},
 		"labelPrompts": {
 			"type": "object",
 			"properties": {

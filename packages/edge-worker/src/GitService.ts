@@ -774,11 +774,14 @@ export class GitService {
 				);
 			}
 
-			// Then, check for repository setup scripts (cross-platform)
+			// Then, check for repository setup scripts (cross-platform). A repo
+			// may override the script name (repoSetupScript) so multiple runner
+			// identities can coexist in one repo with distinct setup scripts.
 			await this.runRepoSetupScript(
 				repository.repositoryPath,
 				workspacePath,
 				issue,
+				repository.repoSetupScript,
 			);
 
 			return {
@@ -1067,11 +1070,13 @@ export class GitService {
 		repositoryPath: string,
 		workspacePath: string,
 		issue: Issue,
+		scriptOverride?: string,
 	): Promise<void> {
 		await this.runRepoHookScript({
 			hook: "setup",
 			repositoryPath,
 			workspacePath,
+			scriptOverride,
 			env: {
 				LINEAR_ISSUE_ID: issue.id,
 				LINEAR_ISSUE_IDENTIFIER: issue.identifier,
@@ -1116,14 +1121,30 @@ export class GitService {
 		workspacePath: string;
 		env: Record<string, string>;
 		timeoutMs: number;
+		/**
+		 * Override the default `cyrus-<hook>.{sh,ps1,cmd,bat}` lookup with a
+		 * specific filename (currently wired for the setup hook). Matched
+		 * verbatim in the repo root; its extension selects the platform
+		 * (.ps1/.cmd/.bat → windows, else unix).
+		 */
+		scriptOverride?: string;
 	}): Promise<void> {
 		const isWindows = process.platform === "win32";
-		const candidates = [
-			{ file: `cyrus-${opts.hook}.sh`, platform: "unix" as const },
-			{ file: `cyrus-${opts.hook}.ps1`, platform: "windows" as const },
-			{ file: `cyrus-${opts.hook}.cmd`, platform: "windows" as const },
-			{ file: `cyrus-${opts.hook}.bat`, platform: "windows" as const },
-		];
+		const candidates = opts.scriptOverride
+			? [
+					{
+						file: opts.scriptOverride,
+						platform: /\.(ps1|cmd|bat)$/i.test(opts.scriptOverride)
+							? ("windows" as const)
+							: ("unix" as const),
+					},
+				]
+			: [
+					{ file: `cyrus-${opts.hook}.sh`, platform: "unix" as const },
+					{ file: `cyrus-${opts.hook}.ps1`, platform: "windows" as const },
+					{ file: `cyrus-${opts.hook}.cmd`, platform: "windows" as const },
+					{ file: `cyrus-${opts.hook}.bat`, platform: "windows" as const },
+				];
 
 		const available = candidates.find((c) => {
 			const scriptPath = join(opts.repositoryPath, c.file);
