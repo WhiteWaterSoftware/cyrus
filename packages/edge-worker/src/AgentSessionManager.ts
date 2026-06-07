@@ -42,12 +42,21 @@ import type {
  * fired because the registry isn't populated on the delegation path —
  * delegations live in AgentSessionManager.sessions instead, so the
  * authoritative termination signal has to come from this class.
+ *
+ * `sessionCompleted` — fires ONCE per completed turn, only from
+ * `completeSession()` after the agent's final result is posted to the
+ * issue tracker, and only when the turn ended naturally (NOT on a
+ * user-requested stop, and NOT on the `removeSession()` hard-cleanup
+ * path that fires `sessionTerminal`). EdgeWorker listens to this to
+ * move the Linear issue into its "In Review" state — the agent has
+ * finished its turn and is awaiting human review.
  */
 export type AgentSessionManagerEvents = {
 	sessionTerminal: (
 		sessionId: string,
 		session: CyrusAgentSession | undefined,
 	) => void;
+	sessionCompleted: (sessionId: string, session: CyrusAgentSession) => void;
 };
 
 /**
@@ -386,6 +395,12 @@ export class AgentSessionManager extends EventEmitter {
 
 		// Post final result to issue tracker
 		await this.addResultEntry(sessionId, resultMessage);
+
+		// Signal that the agent finished its turn and posted its response.
+		// Fires only here (natural completion) — the stop path returned above,
+		// and removeSession()'s hard cleanup fires `sessionTerminal`, not this.
+		// EdgeWorker uses it to move the issue into its "In Review" state.
+		this.emit("sessionCompleted", sessionId, session);
 
 		// Handle child session completion
 		const parentSessionId = this.getParentSessionId?.(sessionId);

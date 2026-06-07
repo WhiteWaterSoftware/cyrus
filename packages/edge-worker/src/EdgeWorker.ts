@@ -557,6 +557,14 @@ export class EdgeWorker extends EventEmitter {
 			void this.maybeDrainQueue();
 		});
 
+		// When a turn completes naturally (agent posted its final response),
+		// move the issue into its "In Review" state — it's now awaiting human
+		// review (PR up / reply posted). Fires once per completed turn; never
+		// on a user stop or the removeSession hard-cleanup path.
+		this.agentSessionManager.on("sessionCompleted", (sessionId, session) => {
+			void this.handleSessionCompletedForReview(sessionId, session);
+		});
+
 		// Initialize repositories with path resolution
 		for (const repo of config.repositories) {
 			if (repo.isActive !== false) {
@@ -5267,6 +5275,14 @@ ${taskSection}`;
 					// Continue with degraded routing context
 				}
 			}
+
+			// A feedback prompt on an EXISTING session does NOT go through
+			// createCyrusAgentSession, so moveIssueToStartedState never ran for
+			// it. Flip the issue back to In Progress now: human feedback means
+			// the agent is working again (and it may currently sit in In Review).
+			if (fullIssue) {
+				await this.moveIssueToStartedState(fullIssue, linearWorkspaceId);
+			}
 		}
 
 		// Note: Streaming check happens later in handlePromptWithStreamingCheck
@@ -5829,15 +5845,6 @@ ${taskSection}`;
 				return;
 			}
 
-			// Check if issue is already in a started state
-			const currentState = await issue.state;
-			if (currentState?.type === "started") {
-				this.logger.debug(
-					`Issue ${issue.identifier} is already in started state (${currentState.name})`,
-				);
-				return;
-			}
-
 			// Get team for the issue
 			const team = await issue.team;
 			if (!team) {
@@ -5868,6 +5875,18 @@ ${taskSection}`;
 				);
 			}
 
+			// Skip only if the issue is ALREADY in the target In-Progress state.
+			// We intentionally do NOT skip on any `type === "started"` state: a
+			// feedback prompt arriving while the issue sits in "In Review" (also
+			// type "started") must flip it back to In Progress.
+			const currentState = await issue.state;
+			if (currentState?.id === startedState.id) {
+				this.logger.debug(
+					`Issue ${issue.identifier} is already in started state (${currentState.name})`,
+				);
+				return;
+			}
+
 			// Update the issue state
 			this.logger.debug(
 				`Moving issue ${issue.identifier} to started state: ${startedState.name}`,
@@ -5892,6 +5911,155 @@ ${taskSection}`;
 				error,
 			);
 			// Don't throw - we don't want to fail the entire assignment process due to state update failure
+		}
+	}
+
+	/**
+	 * Resolve the issue + workspace for a just-completed session and move it
+	 * into the "In Review" state. Best-effort: any failure is logged, never
+	 * thrown — a state update must never break completion handling.
+	 * @param sessionId Completed session ID
+	 * @param session The completed session (from `sessionCompleted` event)
+	 */
+	private async handleSessionCompletedForReview(
+		sessionId: string,
+		session: CyrusAgentSession,
+	): Promise<void> {
+		try {
+			const issueId = session.issueContext?.issueId ?? session.issueId;
+			if (!issueId) {
+				this.logger.debug(
+					`Completed session ${sessionId} has no issue ID, skipping In Review transition`,
+				);
+				return;
+			}
+
+			// Map session -> repository -> Linear workspace ID
+			const repoId = this.sessionRepositories.get(sessionId);
+			const repo = repoId ? this.repositories.get(repoId) : undefined;
+			const linearWorkspaceId = repo?.linearWorkspaceId;
+			if (!linearWorkspaceId) {
+				this.logger.debug(
+					`Completed session ${sessionId} has no Linear workspace, skipping In Review transition`,
+				);
+				return;
+			}
+
+			const fullIssue = await this.fetchFullIssueDetails(
+				issueId,
+				linearWorkspaceId,
+			);
+			if (!fullIssue) {
+				this.logger.warn(
+					`Could not fetch issue ${issueId} for In Review transition (session ${sessionId})`,
+				);
+				return;
+			}
+
+			await this.moveIssueToReviewState(fullIssue, linearWorkspaceId);
+		} catch (error) {
+			this.logger.error(
+				`Failed to move issue to In Review for completed session ${sessionId}:`,
+				error,
+			);
+			// Don't throw - never fail completion handling over a state update.
+		}
+	}
+
+	/**
+	 * Move issue to its "In Review" state when the agent finishes a turn.
+	 * Mirrors moveIssueToStartedState, but selects the review state:
+	 *   - prefer a `type === "started"` state named exactly "In Review"
+	 *   - else the HIGHEST-position `started` state that isn't the
+	 *     In-Progress (lowest-position `started`) one
+	 *   - if no distinct review state exists, log and no-op
+	 * @param issue Full Linear issue object from Linear SDK
+	 * @param linearWorkspaceId Workspace ID for issue tracker lookup
+	 */
+	private async moveIssueToReviewState(
+		issue: Issue,
+		linearWorkspaceId: string,
+	): Promise<void> {
+		try {
+			const issueTracker = this.issueTrackers.get(linearWorkspaceId);
+			if (!issueTracker) {
+				this.logger.warn(
+					`No issue tracker found for workspace ${linearWorkspaceId}, skipping state update`,
+				);
+				return;
+			}
+
+			// Get team for the issue
+			const team = await issue.team;
+			if (!team) {
+				this.logger.warn(
+					`No team found for issue ${issue.identifier}, skipping state update`,
+				);
+				return;
+			}
+
+			// Get available workflow states for the issue's team
+			const teamStates = await issueTracker.fetchWorkflowStates(team.id);
+			const states = teamStates;
+
+			// All "started"-type states, ordered by position (ascending).
+			// Linear uses standardized state types: triage, backlog, unstarted,
+			// started, completed, canceled. Both "In Progress" and "In Review"
+			// are usually type "started", differentiated by position.
+			const startedStates = states.nodes
+				.filter((state) => state.type === "started")
+				.sort((a, b) => a.position - b.position);
+
+			// Prefer a state explicitly named "In Review".
+			let reviewState = startedStates.find((state) =>
+				/^in review$/i.test(state.name),
+			);
+
+			// Otherwise the highest-position started state, provided it is
+			// distinct from the In-Progress (lowest-position) started state.
+			if (!reviewState && startedStates.length > 1) {
+				reviewState = startedStates[startedStates.length - 1];
+			}
+
+			if (!reviewState) {
+				this.logger.debug(
+					`No distinct "In Review" state found for team ${team.id}; leaving issue ${issue.identifier} as-is`,
+				);
+				return;
+			}
+
+			// Already there? Nothing to do.
+			const currentState = await issue.state;
+			if (currentState?.id === reviewState.id) {
+				this.logger.debug(
+					`Issue ${issue.identifier} is already in review state (${currentState.name})`,
+				);
+				return;
+			}
+
+			if (!issue.id) {
+				this.logger.warn(
+					`Issue ${issue.identifier} has no ID, skipping state update`,
+				);
+				return;
+			}
+
+			this.logger.debug(
+				`Moving issue ${issue.identifier} to review state: ${reviewState.name}`,
+			);
+			await issueTracker.updateIssue(issue.id, {
+				stateId: reviewState.id,
+			});
+
+			this.logger.debug(
+				`✅ Successfully moved issue ${issue.identifier} to ${reviewState.name} state`,
+			);
+		} catch (error) {
+			this.logger.error(
+				`Failed to move issue ${issue.identifier} to review state:`,
+				error,
+			);
+			// Don't throw - a state update failure must never fail the turn.
 		}
 	}
 
