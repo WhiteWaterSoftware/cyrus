@@ -177,6 +177,7 @@ import { LinearActivitySink } from "./sinks/LinearActivitySink.js";
 import { ToolPermissionResolver } from "./ToolPermissionResolver.js";
 import type { AgentSessionData, EdgeWorkerEvents } from "./types.js";
 import { UserAccessControl } from "./UserAccessControl.js";
+import { retryWithBackoff } from "./utils/retry.js";
 
 export declare interface EdgeWorker {
 	on<K extends keyof EdgeWorkerEvents>(
@@ -5133,7 +5134,29 @@ ${taskSection}`;
 			return;
 		}
 
-		await this.handleNormalPromptedActivity(webhook, repositories);
+		try {
+			await this.handleNormalPromptedActivity(webhook, repositories);
+		} catch (error) {
+			this.logger.error(
+				`Failed to handle prompted activity for session ${agentSessionId}`,
+				error,
+			);
+			// Never leave the Linear session spinning silently. An instant
+			// acknowledgment thought has usually already been posted, so without a
+			// terminal activity the surface appears stuck forever. Surface the
+			// failure so the user knows to retry.
+			try {
+				await this.agentSessionManager.createErrorActivity(
+					agentSessionId,
+					"I hit an error processing your message and couldn't continue. This can happen on a transient Linear API hiccup — please send your message again. If it keeps failing, try re-assigning the issue to me.",
+				);
+			} catch (postError) {
+				this.logger.error(
+					`Failed to post error activity for session ${agentSessionId}`,
+					postError,
+				);
+			}
+		}
 	}
 
 	/**
@@ -7294,7 +7317,18 @@ ${input.userComment}
 
 		try {
 			this.logger.debug(`Fetching full issue details for ${issueId}`);
-			const fullIssue = await issueTracker.fetchIssue(issueId);
+			// Retry transient Linear API failures so a single flaky fetch does not
+			// abort the whole prompt (which would silently drop the user's message).
+			const fullIssue = await retryWithBackoff(
+				() => issueTracker.fetchIssue(issueId),
+				{
+					onRetry: (error, attempt) =>
+						this.logger.warn(
+							`Retry ${attempt} fetching issue details for ${issueId} after transient error:`,
+							error,
+						),
+				},
+			);
 			this.logger.debug(`Successfully fetched issue details for ${issueId}`);
 
 			// Check if issue has a parent
