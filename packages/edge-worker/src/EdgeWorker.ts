@@ -4984,6 +4984,10 @@ ${taskSection}`;
 			);
 		} catch (error) {
 			this.logger.error("Failed to handle prompted webhook:", error);
+			// This catch previously swallowed the error silently, leaving the
+			// Linear session spinning forever with no terminal activity (the
+			// acknowledgment thought was already posted upstream). Surface it.
+			await this.postPromptedActivityError(sessionId);
 		}
 	}
 
@@ -5134,6 +5138,10 @@ ${taskSection}`;
 			return;
 		}
 
+		// Defense-in-depth: handleNormalPromptedActivity catches failures from the
+		// prompt/resume path internally (see below), but errors thrown before that
+		// point (session creation, attachment setup) would otherwise propagate
+		// uncaught and leave the session spinning. Surface those too.
 		try {
 			await this.handleNormalPromptedActivity(webhook, repositories);
 		} catch (error) {
@@ -5141,21 +5149,27 @@ ${taskSection}`;
 				`Failed to handle prompted activity for session ${agentSessionId}`,
 				error,
 			);
-			// Never leave the Linear session spinning silently. An instant
-			// acknowledgment thought has usually already been posted, so without a
-			// terminal activity the surface appears stuck forever. Surface the
-			// failure so the user knows to retry.
-			try {
-				await this.agentSessionManager.createErrorActivity(
-					agentSessionId,
-					"I hit an error processing your message and couldn't continue. This can happen on a transient Linear API hiccup — please send your message again. If it keeps failing, try re-assigning the issue to me.",
-				);
-			} catch (postError) {
-				this.logger.error(
-					`Failed to post error activity for session ${agentSessionId}`,
-					postError,
-				);
-			}
+			await this.postPromptedActivityError(agentSessionId);
+		}
+	}
+
+	/**
+	 * Surface an unrecoverable prompted-activity failure to the Linear session
+	 * as a terminal error activity, so the surface does not appear stuck after
+	 * the instant-acknowledgment thought was already posted. Never throws — a
+	 * failure to post is logged and swallowed.
+	 */
+	private async postPromptedActivityError(sessionId: string): Promise<void> {
+		try {
+			await this.agentSessionManager.createErrorActivity(
+				sessionId,
+				"I hit an error processing your message and couldn't continue. This can happen on a transient Linear API hiccup — please send your message again. If it keeps failing, try re-assigning the issue to me.",
+			);
+		} catch (postError) {
+			this.logger.error(
+				`Failed to post error activity for session ${sessionId}`,
+				postError,
+			);
 		}
 	}
 

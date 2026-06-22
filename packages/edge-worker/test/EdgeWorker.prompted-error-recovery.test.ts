@@ -157,33 +157,70 @@ describe("EdgeWorker - Prompted activity error recovery", () => {
 		};
 	}
 
-	it("posts a terminal error activity when downstream handling throws", async () => {
-		// Reach handleNormalPromptedActivity with a resolved repository + access...
+	it("surfaces a terminal error activity when the resume/prompt path throws (inner catch)", async () => {
+		// This is the real HALO-442 path: an EXISTING session is resumed and
+		// handlePromptWithStreamingCheck throws (e.g. the Linear "fetch full issue
+		// details" failure). handleNormalPromptedActivity catches that internally,
+		// so the error never reaches the outer handler — it must be surfaced here.
+		const mockSession = {
+			id: "agent-session-123",
+			workspace: { path: "/test/workspaces/TEST-123" },
+			agentRunner: { isRunning: () => false },
+		};
+		mockAgentSessionManager.getSession.mockReturnValue(mockSession);
+
+		(edgeWorker as any).issueTrackers.set("test-workspace", {
+			fetchIssue: vi
+				.fn()
+				.mockResolvedValue({ id: "issue-123", identifier: "TEST-123" }),
+			fetchComment: vi.fn().mockResolvedValue(null),
+		});
+
+		vi.spyOn(
+			edgeWorker as any,
+			"postInstantPromptedAcknowledgment",
+		).mockResolvedValue(undefined);
+		vi.spyOn(
+			edgeWorker as any,
+			"handlePromptWithStreamingCheck",
+		).mockRejectedValue(
+			new Error("Failed to fetch full issue details for issue-123"),
+		);
+
+		// Should not reject — the inner catch surfaces the error.
+		await expect(
+			(edgeWorker as any).handleNormalPromptedActivity(
+				createPromptedWebhook(),
+				[mockRepository],
+			),
+		).resolves.toBeUndefined();
+
+		expect(mockAgentSessionManager.createErrorActivity).toHaveBeenCalledWith(
+			"agent-session-123",
+			expect.stringContaining("error"),
+		);
+	});
+
+	it("surfaces a terminal error activity when an earlier step throws (outer catch)", async () => {
+		// Errors thrown before the inner prompt/resume try (e.g. session creation)
+		// propagate out of handleNormalPromptedActivity and must still be surfaced.
 		vi.spyOn(edgeWorker as any, "getCachedRepositories").mockReturnValue([
 			mockRepository,
 		]);
 		vi.spyOn(edgeWorker as any, "checkUserAccess").mockReturnValue({
 			allowed: true,
 		});
-		// ...then make the normal-prompt path throw (simulating the Linear
-		// "Failed to fetch full issue details" failure that previously went dark).
 		vi.spyOn(
 			edgeWorker as any,
 			"handleNormalPromptedActivity",
-		).mockRejectedValue(
-			new Error("Failed to fetch full issue details for issue-123"),
-		);
+		).mockRejectedValue(new Error("session creation failed"));
 
-		const webhook = createPromptedWebhook();
-
-		// Should not reject — the error is caught and surfaced.
 		await expect(
-			(edgeWorker as any).handleUserPromptedAgentActivity(webhook),
+			(edgeWorker as any).handleUserPromptedAgentActivity(
+				createPromptedWebhook(),
+			),
 		).resolves.toBeUndefined();
 
-		expect(mockAgentSessionManager.createErrorActivity).toHaveBeenCalledTimes(
-			1,
-		);
 		expect(mockAgentSessionManager.createErrorActivity).toHaveBeenCalledWith(
 			"agent-session-123",
 			expect.stringContaining("error"),
