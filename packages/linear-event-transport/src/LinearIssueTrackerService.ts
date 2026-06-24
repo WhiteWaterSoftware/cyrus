@@ -823,15 +823,19 @@ export class LinearIssueTrackerService implements IIssueTrackerService {
 		// you" on the board — a delegator scanning the team can spot which sessions
 		// are waiting without opening each one. This is the single funnel for every
 		// elicitation (LinearActivitySink + AskUserQuestionHandler both land here).
-		// Post-hoc + best-effort: the activity is already created above, and a board
-		// move that fails (or a workspace without the state) must never surface as a
-		// failed activity post. The dispatcher moves the issue back to In Progress on
-		// the next user prompt, so this is set-only here.
+		// FIRE-AND-FORGET, deliberately not awaited: the elicitation is already
+		// visible to the user once the call above returns, and AskUserQuestionHandler
+		// only registers its pending question AFTER createAgentActivity resolves — so
+		// awaiting a multi-call board move here would widen the window in which a fast
+		// user click arrives before the question is registered and gets mishandled as
+		// a normal prompt. markIssueInputNeeded swallows its own errors, so the
+		// floating promise never rejects. The dispatcher clears the state back to In
+		// Progress on the next user prompt, so this is set-only.
 		if (
 			(input.content as { type?: string } | null | undefined)?.type ===
 			"elicitation"
 		) {
-			await this.markIssueInputNeeded(input.agentSessionId);
+			void this.markIssueInputNeeded(input.agentSessionId);
 		}
 		return result;
 	}
