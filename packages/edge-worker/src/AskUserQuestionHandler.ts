@@ -164,32 +164,15 @@ export class AskUserQuestionHandler {
 
 		const elicitationBody = `${question.question}\n\n${optionsText}`;
 
-		// Post elicitation to Linear
-		try {
-			await issueTracker.createAgentActivity({
-				agentSessionId: linearAgentSessionId,
-				content: {
-					type: "elicitation",
-					body: elicitationBody,
-				},
-				signal: AgentActivitySignal.Select,
-				signalMetadata: { options },
-			});
-
-			this.logger.debug(
-				`Posted elicitation with ${options.length} options for session ${linearAgentSessionId}`,
-			);
-		} catch (error) {
-			const errorMessage = (error as Error).message || String(error);
-			this.logger.error(`Failed to post elicitation: ${errorMessage}`);
-			return {
-				answered: false,
-				message: `Failed to present question to user: ${errorMessage}`,
-			};
-		}
-
-		// Create promise to wait for user response
-		// Cleanup is handled via AbortSignal when the session ends
+		// Register the pending question and post the elicitation within one promise,
+		// registering BEFORE the elicitation is posted/visible. Two races depend on
+		// this ordering: (1) a fast user reply must not arrive before the question is
+		// registered, or it is mishandled as a normal prompt and this promise never
+		// resolves; (2) EdgeWorker.moveIssueToInputNeededState fires the instant this
+		// method returns and gates on hasPendingQuestion(), so the entry must already
+		// exist or the board never moves to "Input needed". If posting the elicitation
+		// fails, settle with the error and clear the entry. Cleanup on session end is
+		// handled via the AbortSignal.
 		return new Promise<AskUserQuestionResult>((resolve) => {
 			// Setup abort handler for session cancellation
 			const abortHandler = () => {
@@ -204,17 +187,45 @@ export class AskUserQuestionHandler {
 			};
 			signal.addEventListener("abort", abortHandler, { once: true });
 
-			// Store pending question
+			// Settle = clean up the abort listener + pending entry, then resolve. Used
+			// by the user-response path and the elicitation-post-failure path.
+			const settle = (result: AskUserQuestionResult) => {
+				signal.removeEventListener("abort", abortHandler);
+				this.pendingQuestions.delete(linearAgentSessionId);
+				resolve(result);
+			};
+
+			// Register the pending question FIRST (synchronously, before the post).
 			this.pendingQuestions.set(linearAgentSessionId, {
 				question,
-				resolve: (result: AskUserQuestionResult) => {
-					// Clean up abort handler before resolving
-					signal.removeEventListener("abort", abortHandler);
-					this.pendingQuestions.delete(linearAgentSessionId);
-					resolve(result);
-				},
+				resolve: settle,
 				signal,
 			});
+
+			// Now post the elicitation; on failure, settle with the error.
+			issueTracker
+				.createAgentActivity({
+					agentSessionId: linearAgentSessionId,
+					content: {
+						type: "elicitation",
+						body: elicitationBody,
+					},
+					signal: AgentActivitySignal.Select,
+					signalMetadata: { options },
+				})
+				.then(() => {
+					this.logger.debug(
+						`Posted elicitation with ${options.length} options for session ${linearAgentSessionId}`,
+					);
+				})
+				.catch((error) => {
+					const errorMessage = (error as Error).message || String(error);
+					this.logger.error(`Failed to post elicitation: ${errorMessage}`);
+					settle({
+						answered: false,
+						message: `Failed to present question to user: ${errorMessage}`,
+					});
+				});
 		});
 	}
 
