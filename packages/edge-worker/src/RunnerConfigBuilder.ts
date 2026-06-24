@@ -539,7 +539,7 @@ export class RunnerConfigBuilder {
 							const filePath = response?.path || "the screenshot file";
 							return {
 								continue: true,
-								additionalContext: `Screenshot taken successfully. To share this screenshot in Linear comments, use the linear_upload_file tool to upload ${filePath}. This will return an asset URL that can be embedded in markdown. You can also use the Read tool to view the screenshot file to analyze the visual content.`,
+								additionalContext: `Screenshot taken successfully at ${filePath}. ALWAYS surface UI evidence INLINE, never as an attachment: upload it with the linear_upload_file tool to get an asset URL, then embed that URL in your Linear comment body as inline markdown — \`![screenshot](ASSET_URL)\` — so it renders in the comment itself. Do NOT post it as a bare link or a separate file attachment. You may also use the Read tool to view the screenshot to analyze the visual content.`,
 							};
 						},
 					],
@@ -556,7 +556,7 @@ export class RunnerConfigBuilder {
 							const filePath = toolInput?.filePath || "the screenshot file";
 							return {
 								continue: true,
-								additionalContext: `Screenshot saved. To share this screenshot in Linear comments, use the linear_upload_file tool to upload ${filePath}. This will return an asset URL that can be embedded in markdown.`,
+								additionalContext: `Screenshot saved at ${filePath}. ALWAYS surface UI evidence INLINE, never as an attachment: upload it with the linear_upload_file tool to get an asset URL, then embed that URL in your Linear comment body as inline markdown — \`![screenshot](ASSET_URL)\` — so it renders in the comment itself. Do NOT post it as a bare link or a separate file attachment.`,
 							};
 						},
 					],
