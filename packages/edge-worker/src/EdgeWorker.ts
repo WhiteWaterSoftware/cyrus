@@ -5541,6 +5541,65 @@ ${taskSection}`;
 	}
 
 	/**
+	 * Reflect "Input needed" on the board while the agent is blocked on an
+	 * AskUserQuestion elicitation, so a delegator scanning the team can spot which
+	 * sessions are waiting on a human without opening each one.
+	 *
+	 * Best-effort and gated: the write only lands while a question is genuinely
+	 * pending, RE-CHECKED immediately before the update. A fast user reply clears
+	 * the pending question (AskUserQuestionHandler) and has the dispatcher move the
+	 * issue back to In Progress; without the final gate this delayed move could
+	 * then clobber that with a stale "Input needed". The state is resolved BY NAME
+	 * on the issue's own team (no hardcoded id). The dispatcher clears it back to
+	 * In Progress on the user's reply, so this is set-only. Never throws.
+	 */
+	private async moveIssueToInputNeededState(
+		linearAgentSessionId: string,
+		linearWorkspaceId: string,
+	): Promise<void> {
+		try {
+			if (
+				!this.askUserQuestionHandler.hasPendingQuestion(linearAgentSessionId)
+			) {
+				return;
+			}
+			const issueTracker = this.issueTrackers.get(linearWorkspaceId);
+			if (!issueTracker) return;
+			const session = this.agentSessionManager.getSession(linearAgentSessionId);
+			const issueId = session?.issueContext?.issueId ?? session?.issueId;
+			if (!issueId) return;
+
+			const issue = await issueTracker.fetchIssue(issueId);
+			const team = await issue.team;
+			if (!team) return;
+			const teamStates = await issueTracker.fetchWorkflowStates(team.id);
+			const target = teamStates.nodes.find((s) => s.name === "Input needed");
+			if (!target) {
+				this.logger.warn(
+					`No "Input needed" state on issue ${issue.identifier}'s team; skipping board move`,
+				);
+				return;
+			}
+			const currentState = await issue.state;
+			if (currentState?.id === target.id) return;
+
+			// Final gate immediately before the write (see method doc): bail if the
+			// user already answered while we were resolving the issue/state.
+			if (
+				!this.askUserQuestionHandler.hasPendingQuestion(linearAgentSessionId)
+			) {
+				return;
+			}
+			await issueTracker.updateIssue(issue.id, { stateId: target.id });
+			this.logger.debug(
+				`Moved issue ${issue.identifier} to "Input needed" (pending user question)`,
+			);
+		} catch (error) {
+			this.logger.error("Failed to move issue to Input needed state:", error);
+		}
+	}
+
+	/**
 	 * Post initial comment when assigned to issue
 	 */
 	// private async postInitialComment(issueId: string, repositoryId: string): Promise<void> {
@@ -6527,12 +6586,20 @@ ${input.userComment}
 		return async (input, _sessionId, signal) => {
 			// Note: We use linearAgentSessionId (from closure) instead of the passed sessionId
 			// because the passed sessionId is the Claude session ID, not the Linear agent session ID
-			return this.askUserQuestionHandler.handleAskUserQuestion(
+			const result = this.askUserQuestionHandler.handleAskUserQuestion(
 				input,
 				linearAgentSessionId,
 				organizationId,
 				signal,
 			);
+			// Reflect "Input needed" on the board while the agent waits. Fire-and
+			// -forget so it never delays the question; the move self-gates on the
+			// question still being pending, so it can't clobber a fast reply.
+			void this.moveIssueToInputNeededState(
+				linearAgentSessionId,
+				organizationId,
+			);
+			return result;
 		};
 	}
 
