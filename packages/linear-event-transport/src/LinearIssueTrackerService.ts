@@ -817,7 +817,64 @@ export class LinearIssueTrackerService implements IIssueTrackerService {
 	async createAgentActivity(
 		input: AgentActivityCreateInput,
 	): Promise<AgentActivityPayload> {
-		return await this.linearClient.createAgentActivity(input);
+		const result = await this.linearClient.createAgentActivity(input);
+		// Halo: an `elicitation` is the agent explicitly asking the user something
+		// (the AskUserQuestion tool or an approval prompt), so reflect "blocked on
+		// you" on the board — a delegator scanning the team can spot which sessions
+		// are waiting without opening each one. This is the single funnel for every
+		// elicitation (LinearActivitySink + AskUserQuestionHandler both land here).
+		// Post-hoc + best-effort: the activity is already created above, and a board
+		// move that fails (or a workspace without the state) must never surface as a
+		// failed activity post. The dispatcher moves the issue back to In Progress on
+		// the next user prompt, so this is set-only here.
+		if (
+			(input.content as { type?: string } | null | undefined)?.type ===
+			"elicitation"
+		) {
+			await this.markIssueInputNeeded(input.agentSessionId);
+		}
+		return result;
+	}
+
+	/** Halo workflow state signalling the agent is blocked awaiting the user. */
+	private static readonly INPUT_NEEDED_STATE = "Input needed";
+
+	/**
+	 * Best-effort: move the agent session's issue to the "Input needed" state.
+	 * Resolves the state id BY NAME on the issue's own team (no hardcoded id), and
+	 * skips silently if the session has no issue, the team lacks the state, or the
+	 * issue is already there. Never throws — callers treat it as fire-and-forget.
+	 */
+	private async markIssueInputNeeded(agentSessionId: string): Promise<void> {
+		try {
+			const session = await this.linearClient.agentSession(agentSessionId);
+			const issue = await session.issue;
+			if (!issue) return;
+			const team = await issue.team;
+			if (!team) return;
+			const states = await this.fetchWorkflowStates(team.id);
+			const target = states.nodes.find(
+				(s) => s.name === LinearIssueTrackerService.INPUT_NEEDED_STATE,
+			);
+			if (!target) {
+				this.logger.warn(
+					`No "${LinearIssueTrackerService.INPUT_NEEDED_STATE}" state on issue ${issue.identifier}'s team; skipping board move`,
+				);
+				return;
+			}
+			const current = await issue.state;
+			if (current?.id === target.id) return;
+			await this.updateIssue(issue.id, { stateId: target.id });
+			this.logger.debug(
+				`Moved issue ${issue.identifier} to "${LinearIssueTrackerService.INPUT_NEEDED_STATE}" (agent elicitation)`,
+			);
+		} catch (error) {
+			this.logger.warn(
+				`Failed to mark issue input-needed for session ${agentSessionId}: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
 	}
 
 	// ========================================================================
