@@ -45,6 +45,19 @@ export interface AskUserQuestionHandlerDeps {
 	 * @param organizationId - Linear organization/workspace ID
 	 */
 	getIssueTracker: (organizationId: string) => IIssueTrackerService | null;
+	/**
+	 * Optional: invoked once the elicitation has been SUCCESSFULLY posted to Linear
+	 * (so the question is actually visible to the user). Used to reflect "Input
+	 * needed" on the board only after the post lands — firing it from the caller
+	 * up front would let the board move win a race against a slow-then-failing post,
+	 * leaving the board blocked with no visible question. Best-effort; never awaited.
+	 * @param linearAgentSessionId - Linear agent session ID
+	 * @param organizationId - Linear organization/workspace ID
+	 */
+	onElicitationPosted?: (
+		linearAgentSessionId: string,
+		organizationId: string,
+	) => void;
 }
 
 /**
@@ -217,6 +230,9 @@ export class AskUserQuestionHandler {
 					this.logger.debug(
 						`Posted elicitation with ${options.length} options for session ${linearAgentSessionId}`,
 					);
+					// Reflect "Input needed" on the board ONLY now that the elicitation
+					// is actually visible. Skipped entirely on the failure path below.
+					this.deps.onElicitationPosted?.(linearAgentSessionId, organizationId);
 				})
 				.catch((error) => {
 					const errorMessage = (error as Error).message || String(error);

@@ -428,6 +428,15 @@ export class EdgeWorker extends EventEmitter {
 			getIssueTracker: (linearWorkspaceId: string) => {
 				return this.getIssueTrackerForWorkspace(linearWorkspaceId) ?? null;
 			},
+			// Reflect "Input needed" on the board only after the elicitation has
+			// actually posted (and while the question is still pending). Fire-and
+			// -forget so it never delays the question flow.
+			onElicitationPosted: (linearAgentSessionId, organizationId) => {
+				void this.moveIssueToInputNeededState(
+					linearAgentSessionId,
+					organizationId,
+				);
+			},
 		});
 
 		// Initialize webhook IP validator
@@ -6585,21 +6594,15 @@ ${input.userComment}
 	): AgentRunnerConfig["onAskUserQuestion"] {
 		return async (input, _sessionId, signal) => {
 			// Note: We use linearAgentSessionId (from closure) instead of the passed sessionId
-			// because the passed sessionId is the Claude session ID, not the Linear agent session ID
-			const result = this.askUserQuestionHandler.handleAskUserQuestion(
+			// because the passed sessionId is the Claude session ID, not the Linear agent session ID.
+			// The "Input needed" board move is triggered by the handler's
+			// onElicitationPosted hook (only after the elicitation actually posts).
+			return this.askUserQuestionHandler.handleAskUserQuestion(
 				input,
 				linearAgentSessionId,
 				organizationId,
 				signal,
 			);
-			// Reflect "Input needed" on the board while the agent waits. Fire-and
-			// -forget so it never delays the question; the move self-gates on the
-			// question still being pending, so it can't clobber a fast reply.
-			void this.moveIssueToInputNeededState(
-				linearAgentSessionId,
-				organizationId,
-			);
-			return result;
 		};
 	}
 

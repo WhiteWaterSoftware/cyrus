@@ -446,6 +446,56 @@ describe("AskUserQuestionHandler", () => {
 		});
 	});
 
+	describe("onElicitationPosted hook", () => {
+		const oneQuestion: AskUserQuestionInput = {
+			questions: [
+				{
+					question: "Which database?",
+					header: "Database",
+					options: [{ label: "PostgreSQL", description: "Relational" }],
+					multiSelect: false,
+				},
+			],
+		};
+
+		it("fires after a successful elicitation post", async () => {
+			const onElicitationPosted = vi.fn();
+			const h = new AskUserQuestionHandler({
+				getIssueTracker: mockGetIssueTracker,
+				onElicitationPosted,
+			});
+			const ac = new AbortController();
+			const promise = h.handleAskUserQuestion(
+				oneQuestion,
+				"session-123",
+				"org-123",
+				ac.signal,
+			);
+			await new Promise((r) => setTimeout(r, 10));
+			expect(onElicitationPosted).toHaveBeenCalledWith("session-123", "org-123");
+			h.handleUserResponse("session-123", "PostgreSQL");
+			await promise;
+		});
+
+		it("does NOT fire when the elicitation post fails", async () => {
+			mockCreateAgentActivity.mockRejectedValue(new Error("API Error"));
+			const onElicitationPosted = vi.fn();
+			const h = new AskUserQuestionHandler({
+				getIssueTracker: mockGetIssueTracker,
+				onElicitationPosted,
+			});
+			const ac = new AbortController();
+			const result = await h.handleAskUserQuestion(
+				oneQuestion,
+				"session-123",
+				"org-123",
+				ac.signal,
+			);
+			expect(result.answered).toBe(false);
+			expect(onElicitationPosted).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("error handling", () => {
 		it("should handle createAgentActivity failure", async () => {
 			mockCreateAgentActivity.mockRejectedValue(new Error("API Error"));
